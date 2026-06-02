@@ -226,7 +226,7 @@ export default function App() {
     <div className="flex h-screen flex-col bg-app text-[13px] text-fg">
       {/* Верхняя панель: проекты */}
       <div className="flex h-11 flex-shrink-0 items-center gap-1 border-b border-edge bg-topbar px-2">
-        <button onClick={() => setLeftOpen(o => !o)} title="Проводник" className="rounded-md px-2 py-1.5 text-lg leading-none text-muted transition-colors hover:bg-white/5 hover:text-fg lg:hidden">☰</button>
+        <button onClick={() => { setRightOpen(false); setLeftOpen(o => !o) }} title="Проводник" className="rounded-md px-2 py-1.5 text-lg leading-none text-muted transition-colors hover:bg-white/5 hover:text-fg lg:hidden">☰</button>
         <span className="mr-1 hidden text-[11px] text-muted sm:inline">ПРОЕКТЫ</span>
         <div className="flex items-center gap-1 overflow-x-auto">
           {projects.map(p => (
@@ -249,23 +249,28 @@ export default function App() {
           <button onClick={addProject} title="Новый проект" className="px-2 text-xl leading-none text-muted transition-colors hover:text-fg">+</button>
         </div>
         <span className="ml-auto hidden font-mono text-[11px] text-dim md:inline">{BACKEND_HOST}</span>
-        <button onClick={() => setRightOpen(o => !o)} title="Действия" className="ml-1 rounded-md px-2 py-1.5 text-lg leading-none text-muted transition-colors hover:bg-white/5 hover:text-fg lg:hidden">⚙</button>
+        <button onClick={() => { setLeftOpen(false); setRightOpen(o => !o) }} title="Действия" className="ml-1 rounded-md px-2 py-1.5 text-lg leading-none text-muted transition-colors hover:bg-white/5 hover:text-fg lg:hidden">⚙</button>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Затемнение под выехавшей панелью (мобилка/планшет) */}
-        {(leftOpen || rightOpen) && (
-          <div onClick={() => { setLeftOpen(false); setRightOpen(false) }} className="fixed inset-x-0 bottom-0 top-11 z-30 bg-black/40 lg:hidden" />
-        )}
+        {/* Затемнение под выехавшей панелью (мобилка/планшет) — плавное появление */}
+        <div
+          onClick={() => { setLeftOpen(false); setRightOpen(false) }}
+          className={
+            'fixed inset-x-0 bottom-0 top-11 z-30 bg-black/50 transition-opacity duration-200 lg:hidden ' +
+            ((leftOpen || rightOpen) ? 'opacity-100' : 'pointer-events-none opacity-0')
+          }
+        />
 
         {/* Левая панель: проводник + ветки */}
         <div className={
-          'fixed bottom-0 left-0 top-11 z-40 flex w-[260px] flex-col border-r border-edge bg-sidebar transition-transform duration-200 ' +
-          'lg:static lg:top-auto lg:z-auto lg:w-[240px] lg:translate-x-0 lg:shadow-none ' +
+          'fixed bottom-0 left-0 top-11 z-40 flex w-[86vw] max-w-[340px] flex-col border-r border-edge bg-sidebar transition-transform duration-200 ' +
+          'lg:static lg:top-auto lg:z-auto lg:w-[240px] lg:max-w-none lg:translate-x-0 lg:shadow-none ' +
           (leftOpen ? 'translate-x-0 shadow-2xl shadow-black/50' : '-translate-x-full')
         }>
-          <div className="flex-shrink-0 border-b border-edge px-3 py-1.5 text-[11px] font-semibold tracking-[0.08em] text-muted">
-            ПРОВОДНИК {active && <span className="font-normal text-dim">— {active.name}</span>}
+          <div className="flex flex-shrink-0 items-center gap-2 border-b border-edge px-3 py-2 text-[11px] font-semibold tracking-[0.08em] text-muted">
+            <span className="truncate">ПРОВОДНИК {active && <span className="font-normal text-dim">— {active.name}</span>}</span>
+            <button onClick={() => setLeftOpen(false)} title="Закрыть" className="ml-auto rounded px-1.5 text-lg leading-none text-muted transition-colors hover:bg-white/10 hover:text-fg lg:hidden">×</button>
           </div>
           <div className="flex flex-1 flex-col overflow-hidden">
             <FileTree tree={tree} activeFile={activeFilePath} onOpen={openFile} onRefresh={() => refreshTree()} projectId={active?.id || ''} api={API} />
@@ -381,10 +386,14 @@ export default function App() {
         {/* Правая панель: git, сервер, действия.
             [&>*]:shrink-0 — чтобы при скролле на мобилке блоки (напр. список коммитов) не схлопывались. */}
         <div className={
-          'fixed bottom-0 right-0 top-11 z-40 flex w-[280px] max-w-[88vw] flex-col overflow-y-auto border-l border-edge bg-sidebar transition-transform duration-200 [&>*]:shrink-0 ' +
+          'fixed bottom-0 right-0 top-11 z-40 flex w-[86vw] max-w-[340px] flex-col overflow-y-auto border-l border-edge bg-sidebar transition-transform duration-200 [&>*]:shrink-0 ' +
           'lg:static lg:top-auto lg:z-auto lg:w-[240px] lg:max-w-none lg:translate-x-0 lg:overflow-visible lg:shadow-none ' +
           (rightOpen ? 'translate-x-0 shadow-2xl shadow-black/50' : 'translate-x-full')
         }>
+          <div className="flex items-center justify-between border-b border-edge px-3 py-2 text-[11px] font-semibold tracking-[0.08em] text-muted lg:hidden">
+            <span>ДЕЙСТВИЯ</span>
+            <button onClick={() => setRightOpen(false)} title="Закрыть" className="rounded px-1.5 text-lg leading-none text-muted transition-colors hover:bg-white/10 hover:text-fg">×</button>
+          </div>
           <div className={sectionCls + ' border-b border-edge'}>SOURCE CONTROL</div>
           <div className="max-h-[180px] overflow-y-auto p-2">
             {log.length === 0 && <div className="px-1 py-0.5 text-xs text-dim">Нет коммитов</div>}
