@@ -1,13 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 
-const C = {
-  text: '#cccccc', textMuted: '#858585', textDim: '#6a6a6a',
-  accent: '#0078d4', accentBg: '#094771', btnHover: '#2a2d2e',
-  border: '#3c3c3c', inputBg: '#3c3c3c', menuBg: '#252526',
-  menuHover: '#094771',
-}
-
 export interface FileNode {
   name: string
   path: string
@@ -21,7 +14,7 @@ interface CtxMenu {
 }
 
 function FileIcon({ name, isDir, open }: { name: string; isDir?: boolean; open?: boolean }) {
-  if (isDir) return <span style={{ fontSize: 12, marginRight: 4, color: open ? '#e8ab4b' : '#c8922a', flexShrink: 0 }}>{open ? '▾' : '▸'}</span>
+  if (isDir) return <span className="mr-1 shrink-0 text-xs" style={{ color: open ? '#e8ab4b' : '#c8922a' }}>{open ? '▾' : '▸'}</span>
   const ext = name.split('.').pop()?.toLowerCase() || ''
   const icons: Record<string, [string, string]> = {
     ts: ['TS', '#3178c6'], tsx: ['⚛', '#61dafb'], js: ['JS', '#f7df1e'], jsx: ['⚛', '#61dafb'],
@@ -32,7 +25,7 @@ function FileIcon({ name, isDir, open }: { name: string; isDir?: boolean; open?:
     txt: ['📄', '#aaaaaa'], gitignore: ['⊘', '#f05133'],
   }
   const [label, color] = icons[ext] || ['📄', '#aaaaaa']
-  return <span style={{ fontSize: 10, fontWeight: 700, color, marginRight: 5, minWidth: 16, textAlign: 'center', fontFamily: 'monospace', flexShrink: 0, display: 'inline-block' }}>{label}</span>
+  return <span className="mr-1.5 inline-block min-w-4 shrink-0 text-center font-mono text-[10px] font-bold" style={{ color }}>{label}</span>
 }
 
 interface NodeProps {
@@ -52,12 +45,11 @@ function Node({ node, depth, activeFile, onOpen, onCtxMenu }: NodeProps) {
         <div
           onClick={() => setOpen(o => !o)}
           onContextMenu={e => { e.preventDefault(); onCtxMenu(e, node) }}
-          style={{ paddingLeft: pad, paddingRight: 4, paddingTop: 3, paddingBottom: 3, cursor: 'pointer', display: 'flex', alignItems: 'center', color: C.textMuted, userSelect: 'none', fontSize: 13 }}
-          onMouseEnter={e => (e.currentTarget.style.background = C.btnHover)}
-          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+          style={{ paddingLeft: pad }}
+          className="flex cursor-pointer select-none items-center py-[3px] pr-1 text-[13px] text-muted transition-colors hover:bg-white/5"
         >
           <FileIcon name={node.name} isDir open={open} />
-          <span style={{ color: open ? '#cccccc' : C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
+          <span className={'overflow-hidden text-ellipsis whitespace-nowrap ' + (open ? 'text-fg' : 'text-muted')}>{node.name}</span>
         </div>
         {open && node.children?.map(child => (
           <Node key={child.path} node={child} depth={depth + 1} activeFile={activeFile} onOpen={onOpen} onCtxMenu={onCtxMenu} />
@@ -70,12 +62,14 @@ function Node({ node, depth, activeFile, onOpen, onCtxMenu }: NodeProps) {
     <div
       onClick={() => onOpen(node.path, node.name)}
       onContextMenu={e => { e.preventDefault(); onCtxMenu(e, node) }}
-      style={{ paddingLeft: pad, paddingRight: 4, paddingTop: 3, paddingBottom: 3, cursor: 'pointer', display: 'flex', alignItems: 'center', background: isActive ? C.accentBg : 'transparent', color: isActive ? '#fff' : C.text, userSelect: 'none', fontSize: 13 }}
-      onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = C.btnHover }}
-      onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent' }}
+      style={{ paddingLeft: pad }}
+      className={
+        'flex cursor-pointer select-none items-center py-[3px] pr-1 text-[13px] transition-colors ' +
+        (isActive ? 'bg-accentbg text-white' : 'text-fg hover:bg-white/5')
+      }
     >
       <FileIcon name={node.name} />
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
+      <span className="overflow-hidden text-ellipsis whitespace-nowrap">{node.name}</span>
     </div>
   )
 }
@@ -101,22 +95,19 @@ function ContextMenu({ menu, onClose, onDelete, onRename, onNewFile, onNewDir }:
     <div
       key={label}
       onClick={() => { fn(); onClose() }}
-      style={{ padding: '6px 14px', fontSize: 13, cursor: 'pointer', color: danger ? '#f44747' : C.text, whiteSpace: 'nowrap' }}
-      onMouseEnter={e => (e.currentTarget.style.background = C.menuHover)}
-      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+      className={'cursor-pointer whitespace-nowrap px-3.5 py-1.5 text-[13px] transition-colors hover:bg-accentbg ' + (danger ? 'text-danger' : 'text-fg')}
     >{label}</div>
   )
 
   return (
-    <div ref={ref} style={{
-      position: 'fixed', left: menu.x, top: menu.y, zIndex: 9999,
-      background: C.menuBg, border: '1px solid ' + C.border,
-      borderRadius: 4, minWidth: 160, boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
-      padding: '4px 0',
-    }}>
+    <div
+      ref={ref}
+      style={{ left: menu.x, top: menu.y }}
+      className="fixed z-[9999] min-w-40 rounded-md border border-edge bg-sidebar py-1 shadow-xl shadow-black/50"
+    >
       {menu.node.type === 'dir' && item('📄 Новый файл', () => onNewFile(menu.node))}
       {menu.node.type === 'dir' && item('📁 Новая папка', () => onNewDir(menu.node))}
-      {menu.node.type === 'dir' && <div style={{ height: 1, background: C.border, margin: '4px 0' }} />}
+      {menu.node.type === 'dir' && <div className="my-1 h-px bg-edge" />}
       {item('✏️ Переименовать', () => onRename(menu.node))}
       {item('🗑 Удалить', () => onDelete(menu.node), true)}
     </div>
@@ -128,6 +119,8 @@ interface FileTreeProps {
   onOpen: (path: string, name: string) => void
   onRefresh: () => void; projectId: string; api: string
 }
+
+const fieldCls = 'flex-1 rounded-md border border-accent bg-edge px-1.5 py-0.5 text-xs text-fg outline-none'
 
 export default function FileTree({ tree, activeFile, onOpen, onRefresh, projectId, api }: FileTreeProps) {
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null)
@@ -164,51 +157,51 @@ export default function FileTree({ tree, activeFile, onOpen, onRefresh, projectI
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+    <div className="relative flex h-full flex-col">
       {/* Toolbar */}
-      <div style={{ display: 'flex', alignItems: 'center', padding: '3px 6px', gap: 2, borderBottom: '1px solid ' + C.border, flexShrink: 0 }}>
+      <div className="flex flex-shrink-0 items-center gap-0.5 border-b border-edge px-1.5 py-[3px]">
         {[
           { icon: '+📄', title: 'Новый файл', fn: () => { setCreating({ type: 'file', parentPath: '' }); setNewName('') } },
           { icon: '+📁', title: 'Новая папка', fn: () => { setCreating({ type: 'dir', parentPath: '' }); setNewName('') } },
           { icon: '↺', title: 'Обновить', fn: onRefresh },
         ].map(({ icon, title, fn }) => (
-          <button key={title} onClick={fn} title={title} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 14, padding: '2px 5px', borderRadius: 3, lineHeight: 1 }}
-            onMouseEnter={e => { e.currentTarget.style.color = C.text; e.currentTarget.style.background = C.btnHover }}
-            onMouseLeave={e => { e.currentTarget.style.color = C.textMuted; e.currentTarget.style.background = 'transparent' }}
+          <button
+            key={title} onClick={fn} title={title}
+            className="rounded px-1.5 py-0.5 text-sm leading-none text-muted transition-colors hover:bg-white/5 hover:text-fg"
           >{icon}</button>
         ))}
       </div>
 
       {/* New item input */}
       {creating && (
-        <div style={{ padding: '4px 8px', borderBottom: '1px solid ' + C.border, display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
-          <span style={{ fontSize: 11, flexShrink: 0 }}>{creating.type === 'file' ? '📄' : '📁'}</span>
+        <div className="flex flex-shrink-0 items-center gap-1 border-b border-edge px-2 py-1">
+          <span className="shrink-0 text-[11px]">{creating.type === 'file' ? '📄' : '📁'}</span>
           <input autoFocus placeholder={creating.type === 'file' ? 'имя файла' : 'имя папки'} value={newName}
             onChange={e => setNewName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') setCreating(null) }}
             onBlur={() => setTimeout(() => setCreating(null), 150)}
-            style={{ flex: 1, background: C.inputBg, color: C.text, border: '1px solid ' + C.accent, borderRadius: 3, fontSize: 12, padding: '2px 6px', outline: 'none' }}
+            className={fieldCls}
           />
         </div>
       )}
 
       {/* Rename input */}
       {renaming && (
-        <div style={{ padding: '4px 8px', borderBottom: '1px solid ' + C.border, display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
-          <span style={{ fontSize: 11, flexShrink: 0 }}>✏️</span>
+        <div className="flex flex-shrink-0 items-center gap-1 border-b border-edge px-2 py-1">
+          <span className="shrink-0 text-[11px]">✏️</span>
           <input autoFocus value={renameName}
             onChange={e => setRenameName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') submitRename(); if (e.key === 'Escape') setRenaming(null) }}
             onBlur={() => setTimeout(() => setRenaming(null), 150)}
-            style={{ flex: 1, background: C.inputBg, color: C.text, border: '1px solid ' + C.accent, borderRadius: 3, fontSize: 12, padding: '2px 6px', outline: 'none' }}
+            className={fieldCls}
           />
         </div>
       )}
 
       {/* Tree */}
-      <div style={{ flex: 1, overflowY: 'auto' }}>
+      <div className="flex-1 overflow-y-auto">
         {tree.length === 0
-          ? <div style={{ padding: '8px 16px', fontSize: 12, color: C.textDim, fontStyle: 'italic' }}>пусто</div>
+          ? <div className="px-4 py-2 text-xs italic text-dim">пусто</div>
           : tree.map(node => <Node key={node.path} node={node} depth={0} activeFile={activeFile} onOpen={onOpen} onCtxMenu={(e, n) => setCtxMenu({ x: e.clientX, y: e.clientY, node: n })} />)
         }
       </div>

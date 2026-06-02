@@ -1,10 +1,5 @@
-export const C = {
-  bg: '#1e1e1e', sidebar: '#252526', panel: '#1e1e1e', topbar: '#323233',
-  border: '#3c3c3c', inputBg: '#2d2d2d', text: '#cccccc', textMuted: '#858585',
-  textDim: '#6a6a6a', accent: '#0078d4', accentBg: '#094771', msgAgent: '#2d2d2d',
-  green: '#4ec9b0', yellow: '#dcdcaa', btnHover: '#2a2d2e',
-}
-
+// Цвета подтипов агентов используются динамически в JS (подпись/чип/точка статуса).
+// Остальная палитра вынесена в дизайн-токены Tailwind (src/index.css @theme).
 export const agentColors: Record<string, string> = { manager: '#569cd6', coder: '#4ec9b0', reviewer: '#dcdcaa', overseer: '#c586c0' }
 
 export const OVERSEER = 'overseer'

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { C, agentColors, statusLabels, agentLabel, Message } from './theme'
+import { agentColors, statusLabels, agentLabel, Message } from './theme'
 
 interface Props {
   agentType: string
@@ -15,46 +15,66 @@ export default function AgentSession({ agentType, messages, status, streaming, i
   const bottom = useRef<HTMLDivElement>(null)
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, status])
 
-  const color = agentColors[agentType] || C.text
+  const color = agentColors[agentType] || '#cccccc'
   const label = agentLabel(agentType)
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
         {messages.length === 0 && (
-          <div style={{ color: C.textDim, fontSize: 13, textAlign: 'center', marginTop: 40 }}>
+          <div className="mt-10 text-center text-[13px] text-dim">
             Напиши задачу — агент «{label}» начнёт работу
           </div>
         )}
         {messages.map((m, i) => (
-          <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
-            {m.role === 'agent' && <div style={{ fontSize: 11, color, marginBottom: 4, fontWeight: 600 }}>{label.toUpperCase()}</div>}
-            <div style={{ maxWidth: '80%', padding: '8px 12px', borderRadius: 4, fontSize: 13, lineHeight: 1.6, background: m.role === 'user' ? C.accentBg : C.msgAgent, color: C.text, border: '1px solid ' + (m.role === 'user' ? C.accent : C.border), whiteSpace: 'pre-wrap', fontFamily: m.role === 'agent' ? "'Consolas', monospace" : 'inherit' }}>
-              {m.text}{m.streaming ? <span style={{ color: C.accent }}>▍</span> : ''}
+          <div key={i} className={'flex flex-col ' + (m.role === 'user' ? 'items-end' : 'items-start')}>
+            {m.role === 'agent' && (
+              <div className="mb-1 text-[11px] font-semibold" style={{ color }}>{label.toUpperCase()}</div>
+            )}
+            <div
+              className={
+                'max-w-[80%] whitespace-pre-wrap rounded-lg border px-3 py-2 text-[13px] leading-relaxed ' +
+                (m.role === 'user'
+                  ? 'border-accent bg-accentbg text-white'
+                  : 'border-edge bg-field text-fg font-mono')
+              }
+            >
+              {m.text}{m.streaming ? <span className="text-accent">▍</span> : ''}
             </div>
           </div>
         ))}
         {status && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-            <div style={{ fontSize: 11, color, marginBottom: 4, fontWeight: 600 }}>{label.toUpperCase()}</div>
-            <div style={{ padding: '6px 12px', borderRadius: 4, fontSize: 12, background: '#2a2a2a', border: '1px solid ' + C.border, color: C.textMuted, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: status === 'done' ? C.green : status === 'error' ? '#f44747' : C.accent }} />
+          <div className="flex flex-col items-start">
+            <div className="mb-1 text-[11px] font-semibold" style={{ color }}>{label.toUpperCase()}</div>
+            <div className="flex items-center gap-2 rounded-lg border border-edge bg-[#2a2a2a] px-3 py-1.5 text-xs text-muted">
+              <span
+                className="inline-block h-2 w-2 rounded-full"
+                style={{ background: status === 'done' ? '#4ec9b0' : status === 'error' ? '#f44747' : '#0078d4' }}
+              />
               {statusLabels[status] || status}
             </div>
           </div>
         )}
         <div ref={bottom} />
       </div>
-      <div style={{ borderTop: '1px solid ' + C.border, padding: '8px 12px', display: 'flex', gap: 8, background: C.sidebar, flexShrink: 0, alignItems: 'center' }}>
-        <span style={{ fontSize: 12, padding: '4px 8px', borderRadius: 3, border: '1px solid ' + C.border, background: C.inputBg, color, fontWeight: 600, whiteSpace: 'nowrap' }}>🤖 {label}</span>
+
+      <div className="flex flex-shrink-0 items-center gap-2 border-t border-edge bg-sidebar px-3 py-2">
+        <span
+          className="whitespace-nowrap rounded-md border border-edge bg-field px-2 py-1 text-xs font-semibold"
+          style={{ color }}
+        >🤖 {label}</span>
         <input
           value={input}
           onChange={e => onInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend() } }}
           placeholder="Напиши задачу... (Enter для отправки)"
-          style={{ flex: 1, padding: '6px 10px', borderRadius: 3, border: '1px solid ' + C.border, fontSize: 13, background: C.inputBg, color: C.text, outline: 'none' }}
+          className="flex-1 rounded-md border border-edge bg-field px-2.5 py-1.5 text-[13px] text-fg outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/40"
         />
-        <button onClick={onSend} disabled={streaming} style={{ padding: '6px 14px', borderRadius: 3, border: '1px solid ' + C.accent, cursor: streaming ? 'not-allowed' : 'pointer', fontSize: 13, background: streaming ? C.inputBg : C.accentBg, color: streaming ? C.textMuted : '#fff' }}>→</button>
+        <button
+          onClick={onSend}
+          disabled={streaming}
+          className="rounded-md border border-accent bg-accentbg px-3.5 py-1.5 text-[13px] text-white transition hover:brightness-125 disabled:cursor-not-allowed disabled:border-edge disabled:bg-field disabled:text-muted"
+        >→</button>
       </div>
     </div>
   )

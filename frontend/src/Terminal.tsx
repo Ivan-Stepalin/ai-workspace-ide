@@ -145,16 +145,14 @@ export default function TerminalPanel({ projectId, onFileSystemChange }: Props) 
   }, [projectId, send, triggerFsUpdate])
 
   return (
-    <div style={{ width: '100%', height: '100%', background: '#1e1e1e', overflow: 'hidden' }}>
+    <div className="h-full w-full overflow-hidden bg-app">
+      {/* xterm рисует свой внутренний DOM — стилизуем его обычным CSS, Tailwind тут не подходит */}
       <style>{`
         .xterm { height: 100% !important; padding: 0 !important; text-align: left; }
         .xterm-viewport { overflow-y: scroll !important; }
         .xterm-screen canvas { display: block; }
       `}</style>
-      <div
-        ref={containerRef}
-        style={{ width: '100%', height: '100%', boxSizing: 'border-box', padding: '4px 0 4px 8px' }}
-      />
+      <div ref={containerRef} className="box-border h-full w-full pb-1 pl-2 pr-0 pt-1" />
     </div>
   )
 }

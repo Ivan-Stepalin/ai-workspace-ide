@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
-import { C } from './theme'
 import { API } from './config'
 import { Project } from './types'
 
@@ -9,6 +8,10 @@ interface Props {
   onClose: () => void
   onAdded: (p: Project) => void
 }
+
+const field =
+  'px-2.5 py-2 rounded-md border border-edge bg-field text-fg text-[13px] outline-none ' +
+  'transition focus:border-accent focus:ring-2 focus:ring-accent/40 disabled:opacity-60'
 
 export default function AddRepoModal({ open, onClose, onAdded }: Props) {
   const [url, setUrl] = useState('')
@@ -44,20 +47,23 @@ export default function AddRepoModal({ open, onClose, onAdded }: Props) {
   return (
     <div
       onMouseDown={() => { if (!loading) onClose() }}
-      style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/55 backdrop-blur-sm"
     >
-      <style>{`@keyframes awspin{to{transform:rotate(360deg)}}`}</style>
       <div
         onMouseDown={e => e.stopPropagation()}
-        style={{ width: 460, maxWidth: '90vw', background: C.sidebar, border: '1px solid ' + C.border, borderRadius: 6, boxShadow: '0 12px 40px rgba(0,0,0,0.5)', color: C.text, overflow: 'hidden' }}
+        className="w-[460px] max-w-[90vw] overflow-hidden rounded-xl border border-edge bg-sidebar text-fg shadow-2xl shadow-black/50 ring-1 ring-white/5"
       >
-        <div style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid ' + C.border }}>
-          <span style={{ fontSize: 14, fontWeight: 600 }}>➕ Добавить репозиторий</span>
-          <button onClick={() => { if (!loading) onClose() }} disabled={loading} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: C.textMuted, fontSize: 18, lineHeight: 1, cursor: loading ? 'not-allowed' : 'pointer' }}>×</button>
+        <div className="flex items-center gap-2 border-b border-edge px-4 py-3">
+          <span className="text-sm font-semibold">➕ Добавить репозиторий</span>
+          <button
+            onClick={() => { if (!loading) onClose() }}
+            disabled={loading}
+            className="ml-auto text-lg leading-none text-muted transition hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+          >×</button>
         </div>
 
-        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: C.textMuted }}>
+        <div className="flex flex-col gap-3 p-4">
+          <label className="flex flex-col gap-1 text-xs text-muted">
             URL репозитория
             <input
               autoFocus
@@ -66,37 +72,45 @@ export default function AddRepoModal({ open, onClose, onAdded }: Props) {
               onKeyDown={e => { if (e.key === 'Enter') submit() }}
               disabled={loading}
               placeholder="https://github.com/user/repo.git"
-              style={{ padding: '8px 10px', borderRadius: 4, border: '1px solid ' + C.border, fontSize: 13, background: C.inputBg, color: C.text, outline: 'none' }}
+              className={field}
             />
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: C.textMuted }}>
-            Имя проекта <span style={{ color: C.textDim }}>(необязательно — по умолчанию из URL)</span>
+          <label className="flex flex-col gap-1 text-xs text-muted">
+            <span>Имя проекта <span className="text-dim">(необязательно — по умолчанию из URL)</span></span>
             <input
               value={name}
               onChange={e => setName(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') submit() }}
               disabled={loading}
               placeholder="my-project"
-              style={{ padding: '8px 10px', borderRadius: 4, border: '1px solid ' + C.border, fontSize: 13, background: C.inputBg, color: C.text, outline: 'none' }}
+              className={field}
             />
           </label>
 
           {error && (
-            <div style={{ padding: '8px 10px', borderRadius: 4, fontSize: 12, background: 'rgba(244,71,71,0.12)', border: '1px solid #f44747', color: '#f48771', whiteSpace: 'pre-wrap' }}>
+            <div className="whitespace-pre-wrap rounded-md border border-danger bg-danger/10 px-2.5 py-2 text-xs text-[#f48771]">
               {error}
             </div>
           )}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderTop: '1px solid ' + C.border, background: C.panel }}>
+        <div className="flex items-center gap-2.5 border-t border-edge bg-app px-4 py-3">
           {loading && (
-            <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: C.textMuted }}>
-              <span style={{ width: 14, height: 14, border: '2px solid ' + C.border, borderTopColor: C.accent, borderRadius: '50%', display: 'inline-block', animation: 'awspin 0.7s linear infinite' }} />
+            <span className="flex items-center gap-2 text-xs text-muted">
+              <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-edge border-t-accent" />
               Клонирование репозитория…
             </span>
           )}
-          <button onClick={() => { if (!loading) onClose() }} disabled={loading} style={{ marginLeft: 'auto', padding: '6px 14px', borderRadius: 4, border: '1px solid ' + C.border, background: 'transparent', color: C.text, cursor: loading ? 'not-allowed' : 'pointer', fontSize: 13 }}>Отмена</button>
-          <button onClick={submit} disabled={loading || !url.trim()} style={{ padding: '6px 16px', borderRadius: 4, border: '1px solid ' + C.accent, background: (loading || !url.trim()) ? C.inputBg : C.accentBg, color: (loading || !url.trim()) ? C.textMuted : '#fff', cursor: (loading || !url.trim()) ? 'not-allowed' : 'pointer', fontSize: 13 }}>Добавить</button>
+          <button
+            onClick={() => { if (!loading) onClose() }}
+            disabled={loading}
+            className="ml-auto rounded-md border border-edge px-3.5 py-1.5 text-[13px] text-fg transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+          >Отмена</button>
+          <button
+            onClick={submit}
+            disabled={loading || !url.trim()}
+            className="rounded-md border border-accent bg-accentbg px-4 py-1.5 text-[13px] text-white transition hover:brightness-125 disabled:cursor-not-allowed disabled:border-edge disabled:bg-field disabled:text-muted"
+          >Добавить</button>
         </div>
       </div>
     </div>
