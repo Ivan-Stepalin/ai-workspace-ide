@@ -2,6 +2,7 @@
 node_modules/
 dist/
 dist-ssr/
+dev-dist/
 *.tsbuildinfo
 
 # Локальные настройки окружения (секреты/пути конкретной машины)
