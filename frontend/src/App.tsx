@@ -4,6 +4,7 @@ import Editor, { loader } from '@monaco-editor/react'
 import FileTree, { FileNode } from './FileTree'
 import TerminalPanel from './Terminal'
 import AgentSession from './AgentSession'
+import AddRepoModal from './AddRepoModal'
 import { C, agentColors, AGENTS, agentLabel, OVERSEER, Message } from './theme'
 import { API, WS_URL, BACKEND_HOST } from './config'
 
@@ -48,6 +49,7 @@ export default function App() {
   const [build, setBuild] = useState<Record<string, BuildInfo>>({})
   const [tabs, setTabs] = useState<Tab[]>([])
   const [activeTab, setActiveTab] = useState(0)
+  const [repoModalOpen, setRepoModalOpen] = useState(false)
   const ws = useRef<WebSocket | null>(null)
   const activeRef = useRef<Project | null>(null)
   const saveRef = useRef<(i: number) => void>(() => {})
@@ -160,12 +162,10 @@ export default function App() {
     setTabs(prev => { const next = [...prev, newTab]; setActiveTab(next.length - 1); return next })
   }
 
-  function addRepo() {
-    const url = prompt('URL git-репозитория для клонирования:')
-    if (!url) return
-    axios.post<Project>(API + '/api/projects/clone', { url })
-      .then(r => { setProjects(p => p.some(x => x.id === r.data.id) ? p : [...p, r.data]); switchProject(r.data) })
-      .catch(e => alert('Не удалось склонировать: ' + (e?.response?.data?.error || e)))
+  function onRepoAdded(proj: Project) {
+    setProjects(p => p.some(x => x.id === proj.id) ? p : [...p, proj])
+    setRepoModalOpen(false)
+    switchProject(proj)
   }
 
   function saveFile(tabIndex: number) {
@@ -358,7 +358,7 @@ export default function App() {
           <div style={{ padding: '8px 12px 4px', fontSize: 11, color: C.textMuted, fontWeight: 600, letterSpacing: '0.08em', borderTop: '1px solid ' + C.border }}>ГЛОБАЛЬНО</div>
           <div style={{ padding: '8px' }}>
             {actionBtn('🧭 Общий менеджер', openOverseer, agentColors.overseer)}
-            {actionBtn('➕ Добавить репозиторий', addRepo)}
+            {actionBtn('➕ Добавить репозиторий', () => setRepoModalOpen(true))}
           </div>
           <div style={{ padding: '8px 12px 4px', fontSize: 11, color: C.textMuted, fontWeight: 600, letterSpacing: '0.08em', borderTop: '1px solid ' + C.border }}>ДЕЙСТВИЯ {active && <span style={{ color: C.textDim, fontWeight: 400 }}>— {active.name}</span>}</div>
           <div style={{ padding: '8px' }}>
@@ -376,6 +376,8 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      <AddRepoModal open={repoModalOpen} onClose={() => setRepoModalOpen(false)} onAdded={onRepoAdded} />
     </div>
   )
 }
