@@ -11,7 +11,7 @@ interface Props {
 
 const field =
   'px-2.5 py-2 rounded-md border border-edge bg-field text-fg text-[13px] outline-none ' +
-  'transition focus:border-accent focus:ring-2 focus:ring-accent/40 disabled:opacity-60'
+  'transition focus:border-accent disabled:opacity-60'
 
 // имя проекта из ссылки: последний сегмент пути без .git ("…/Wave.git" → "Wave")
 const deriveName = (u: string) => (u.trim().replace(/\/+$/, '').split('/').pop() || '').replace(/\.git$/i, '')
@@ -67,7 +67,7 @@ export default function AddRepoModal({ open, onClose, onAdded }: Props) {
     >
       <div
         onMouseDown={e => e.stopPropagation()}
-        className="w-[460px] max-w-[90vw] overflow-hidden rounded-xl border border-edge bg-sidebar text-fg shadow-2xl shadow-black/50 ring-1 ring-white/5"
+        className="w-[460px] max-w-[90vw] overflow-hidden rounded-xl border border-edge bg-sidebar text-fg shadow-2xl shadow-black/50"
       >
         <div className="flex items-center gap-2 border-b border-edge px-4 py-3">
           <span className="text-sm font-semibold">➕ Добавить репозиторий</span>

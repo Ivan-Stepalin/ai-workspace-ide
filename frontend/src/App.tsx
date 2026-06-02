@@ -5,6 +5,7 @@ import FileTree, { FileNode } from './FileTree'
 import TerminalPanel from './Terminal'
 import AddRepoModal from './AddRepoModal'
 import ConfirmModal from './ConfirmModal'
+import PromptModal, { PromptConfig } from './PromptModal'
 import { agentColors, AGENTS, agentLabel, OVERSEER } from './theme'
 import { API, WS_URL, BACKEND_HOST } from './config'
 
@@ -54,6 +55,8 @@ export default function App() {
   // выезжающие боковые панели на мобилке/планшете (на десктопе всегда видны)
   const [leftOpen, setLeftOpen] = useState(false)
   const [rightOpen, setRightOpen] = useState(false)
+  const [promptCfg, setPromptCfg] = useState<PromptConfig | null>(null)  // модалка ввода текста
+  const [notice, setNotice] = useState('')                               // модалка-уведомление (ошибки)
   const ws = useRef<WebSocket | null>(null)
   const activeRef = useRef<Project | null>(null)
   const saveRef = useRef<(uid: number) => void>(() => {})
@@ -173,7 +176,7 @@ export default function App() {
           else { setActive(null); activeRef.current = null; setActiveUid(null); setTree([]); setBranches({ all: [], current: '' }); setLog([]) }
         }
       })
-      .catch(e => { setDeleting(false); alert('Не удалось удалить проект: ' + (e?.response?.data?.error || e)) })
+      .catch(e => { setDeleting(false); setNotice('Не удалось удалить проект: ' + (e?.response?.data?.error || e)) })
   }
 
   function saveFile(uid: number) {
@@ -197,9 +200,10 @@ export default function App() {
   }
 
   function addProject() {
-    const name = prompt('Название проекта:')
-    if (!name) return
-    axios.post<Project>(API + '/api/projects', { name }).then(r => { setProjects(p => [...p, r.data]); switchProject(r.data) })
+    setPromptCfg({
+      title: 'Новый проект', label: 'Название проекта', placeholder: 'my-project', confirmLabel: 'Создать',
+      onSubmit: name => axios.post<Project>(API + '/api/projects', { name }).then(r => { setProjects(p => [...p, r.data]); switchProject(r.data) }),
+    })
   }
 
   const buildInfo = active ? build[active.id] : null
@@ -231,7 +235,7 @@ export default function App() {
               onClick={() => switchProject(p)}
               className={
                 'flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md py-1.5 pl-3 pr-2 text-sm transition-colors ' +
-                (active?.id === p.id ? 'bg-accentbg text-white ring-1 ring-accent' : 'text-muted hover:bg-white/5')
+                (active?.id === p.id ? 'bg-accentbg text-white' : 'text-muted hover:bg-white/5')
               }
             >
               <span>{p.name}</span>
@@ -374,9 +378,10 @@ export default function App() {
           </div>
         </div>
 
-        {/* Правая панель: git, сервер, действия */}
+        {/* Правая панель: git, сервер, действия.
+            [&>*]:shrink-0 — чтобы при скролле на мобилке блоки (напр. список коммитов) не схлопывались. */}
         <div className={
-          'fixed bottom-0 right-0 top-11 z-40 flex w-[280px] max-w-[88vw] flex-col overflow-y-auto border-l border-edge bg-sidebar transition-transform duration-200 ' +
+          'fixed bottom-0 right-0 top-11 z-40 flex w-[280px] max-w-[88vw] flex-col overflow-y-auto border-l border-edge bg-sidebar transition-transform duration-200 [&>*]:shrink-0 ' +
           'lg:static lg:top-auto lg:z-auto lg:w-[240px] lg:max-w-none lg:translate-x-0 lg:overflow-visible lg:shadow-none ' +
           (rightOpen ? 'translate-x-0 shadow-2xl shadow-black/50' : 'translate-x-full')
         }>
@@ -404,11 +409,11 @@ export default function App() {
           </div>
 
           <div className={sectionCls + ' border-t border-edge'}>ДЕЙСТВИЯ {active && <span className="font-normal text-dim">— {active.name}</span>}</div>
-          <div className="p-2">
+          <div className="flex flex-col gap-2 p-3">
             {AGENTS.map(a => actionBtn('🤖 ' + a.label, () => openAgent(a.type), agentColors[a.type]))}
             {actionBtn('⌨ Терминал', openTerminal)}
             {buildInfo?.running && actionBtn('🌐 Открыть :' + buildInfo.port, () => window.open('http://' + BACKEND_HOST + ':' + buildInfo!.port, '_blank'), '#4ec9b0')}
-            {actionBtn('Коммит', () => { const m = prompt('Сообщение коммита:'); if (m && active) axios.post(API + '/api/projects/' + active.id + '/commit', { message: m }).then(() => { switchProject(active); refreshTree() }) })}
+            {actionBtn('Коммит', () => { if (!active) return; const proj = active; setPromptCfg({ title: 'Коммит', label: 'Сообщение коммита', placeholder: 'chore: update', confirmLabel: 'Закоммитить', onSubmit: m => axios.post(API + '/api/projects/' + proj.id + '/commit', { message: m }).then(() => { switchProject(proj); refreshTree() }) }) })}
             {actionBtn('Push', () => active && axios.post(API + '/api/projects/' + active.id + '/push'))}
             {actionBtn('Старт :8080', () => active && axios.post(API + '/api/projects/' + active.id + '/build/start', { port: 8080 }))}
             {actionBtn('Стоп', () => active && axios.post(API + '/api/projects/' + active.id + '/build/stop'))}
@@ -431,6 +436,16 @@ export default function App() {
         loading={deleting}
         onConfirm={() => confirmDeleteProj && deleteProjectConfirmed(confirmDeleteProj)}
         onClose={() => { if (!deleting) setConfirmDeleteProj(null) }}
+      />
+      <PromptModal config={promptCfg} onClose={() => setPromptCfg(null)} />
+      <ConfirmModal
+        open={!!notice}
+        title="Ошибка"
+        message={notice}
+        confirmLabel="OK"
+        hideCancel
+        onConfirm={() => setNotice('')}
+        onClose={() => setNotice('')}
       />
     </div>
   )

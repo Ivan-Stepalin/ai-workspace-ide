@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
+import ConfirmModal from './ConfirmModal'
 
 export interface FileNode {
   name: string
@@ -128,10 +129,16 @@ export default function FileTree({ tree, activeFile, onOpen, onRefresh, projectI
   const [newName, setNewName] = useState('')
   const [renaming, setRenaming] = useState<{ node: FileNode } | null>(null)
   const [renameName, setRenameName] = useState('')
+  const [pendingDelete, setPendingDelete] = useState<FileNode | null>(null)
 
   function handleDelete(node: FileNode) {
-    if (!confirm('Удалить ' + node.name + '?')) return
-    axios.delete(api + '/api/projects/' + projectId + '/fs/' + encodeURIComponent(node.path)).then(onRefresh)
+    setPendingDelete(node)
+  }
+
+  function confirmDelete() {
+    const node = pendingDelete
+    setPendingDelete(null)
+    if (node) axios.delete(api + '/api/projects/' + projectId + '/fs/' + encodeURIComponent(node.path)).then(onRefresh)
   }
 
   function handleRename(node: FileNode) {
@@ -159,7 +166,7 @@ export default function FileTree({ tree, activeFile, onOpen, onRefresh, projectI
   return (
     <div className="relative flex h-full flex-col">
       {/* Toolbar */}
-      <div className="flex flex-shrink-0 items-center gap-0.5 border-b border-edge px-1.5 py-[3px]">
+      <div className="flex flex-shrink-0 items-center gap-2 border-b border-edge p-2">
         {[
           { icon: '+📄', title: 'Новый файл', fn: () => { setCreating({ type: 'file', parentPath: '' }); setNewName('') } },
           { icon: '+📁', title: 'Новая папка', fn: () => { setCreating({ type: 'dir', parentPath: '' }); setNewName('') } },
@@ -167,7 +174,7 @@ export default function FileTree({ tree, activeFile, onOpen, onRefresh, projectI
         ].map(({ icon, title, fn }) => (
           <button
             key={title} onClick={fn} title={title}
-            className="rounded px-1.5 py-0.5 text-sm leading-none text-muted transition-colors hover:bg-white/5 hover:text-fg"
+            className="rounded-md border border-edge px-3 py-1.5 text-base leading-none text-muted transition-colors hover:bg-white/5 hover:text-fg active:bg-white/10"
           >{icon}</button>
         ))}
       </div>
@@ -217,6 +224,16 @@ export default function FileTree({ tree, activeFile, onOpen, onRefresh, projectI
           onNewDir={n => { setCreating({ type: 'dir', parentPath: n.path }); setNewName('') }}
         />
       )}
+
+      <ConfirmModal
+        open={!!pendingDelete}
+        title="Удаление"
+        message={pendingDelete ? `Удалить «${pendingDelete.name}»?${pendingDelete.type === 'dir' ? '\n\nПапка со всем содержимым будет удалена.' : ''}` : ''}
+        confirmLabel="Удалить"
+        danger
+        onConfirm={confirmDelete}
+        onClose={() => setPendingDelete(null)}
+      />
     </div>
   )
 }

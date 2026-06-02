@@ -7,11 +7,12 @@ interface Props {
   confirmLabel?: string
   danger?: boolean
   loading?: boolean
+  hideCancel?: boolean   // режим уведомления: только кнопка подтверждения
   onConfirm: () => void
   onClose: () => void
 }
 
-export default function ConfirmModal({ open, title, message, confirmLabel = 'Подтвердить', danger, loading, onConfirm, onClose }: Props) {
+export default function ConfirmModal({ open, title, message, confirmLabel = 'Подтвердить', danger, loading, hideCancel, onConfirm, onClose }: Props) {
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !loading) onClose() }
@@ -32,7 +33,7 @@ export default function ConfirmModal({ open, title, message, confirmLabel = 'П�
     >
       <div
         onMouseDown={e => e.stopPropagation()}
-        className="w-[420px] max-w-[90vw] overflow-hidden rounded-xl border border-edge bg-sidebar text-fg shadow-2xl shadow-black/50 ring-1 ring-white/5"
+        className="w-[420px] max-w-[90vw] overflow-hidden rounded-xl border border-edge bg-sidebar text-fg shadow-2xl shadow-black/50"
       >
         <div className="border-b border-edge px-4 py-3 text-sm font-semibold">{title}</div>
         <div className="px-4 py-4 text-[13px] leading-relaxed text-fg whitespace-pre-wrap">{message}</div>
@@ -43,15 +44,17 @@ export default function ConfirmModal({ open, title, message, confirmLabel = 'П�
               Удаление…
             </span>
           )}
-          <button
-            onClick={() => { if (!loading) onClose() }}
-            disabled={loading}
-            className="ml-auto rounded-md border border-edge px-3.5 py-1.5 text-[13px] text-fg transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-          >Отмена</button>
+          {!hideCancel && (
+            <button
+              onClick={() => { if (!loading) onClose() }}
+              disabled={loading}
+              className="ml-auto rounded-md border border-edge px-3.5 py-1.5 text-[13px] text-fg transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+            >Отмена</button>
+          )}
           <button
             onClick={onConfirm}
             disabled={loading}
-            className={'rounded-md border px-4 py-1.5 text-[13px] transition disabled:cursor-not-allowed disabled:opacity-50 ' + confirmCls}
+            className={'rounded-md border px-4 py-1.5 text-[13px] transition disabled:cursor-not-allowed disabled:opacity-50 ' + (hideCancel ? 'ml-auto ' : '') + confirmCls}
           >{confirmLabel}</button>
         </div>
       </div>
