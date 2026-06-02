@@ -1,0 +1,22 @@
+# Зависимости и сборка
+node_modules/
+dist/
+dist-ssr/
+*.tsbuildinfo
+
+# Локальные настройки окружения (секреты/пути конкретной машины)
+.env
+.env.local
+*.local
+
+# Данные приложения (проекты пользователя и БД)
+data/
+*.db
+
+# Логи и системное
+*.log
+npm-debug.log*
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
