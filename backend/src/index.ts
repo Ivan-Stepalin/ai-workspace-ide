@@ -10,6 +10,7 @@ import * as pty from 'node-pty';
 import { PROMPTS } from './agents.js';
 import { getLog, getBranches, commitAll, pushRepo, getFiles, getFileTree } from './git.js';
 import { listProjects, createProject, getProject, cloneRepo, deleteProject, PROJECTS_DIR } from './projects.js';
+import { initTelegramBot } from './telegram.js';
 import { WsMessage } from './types.js';
 
 const app = express();
@@ -316,4 +317,5 @@ wss.on('connection', ws => {
 
 const SERVER_PORT = Number(process.env.PORT || 3001);
 syncManagerSkills();
+initTelegramBot();
 server.listen(SERVER_PORT, '0.0.0.0', () => console.log('Backend running on :' + SERVER_PORT));

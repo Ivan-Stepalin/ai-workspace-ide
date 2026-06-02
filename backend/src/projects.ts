@@ -8,7 +8,7 @@ import { Project } from './types.js';
 // projects/ и workspace.db — пользовательские данные, в репозиторий не коммитятся.
 const DATA_DIR = process.env.DATA_DIR || path.resolve('data');
 export const PROJECTS_DIR = process.env.PROJECTS_DIR || path.join(DATA_DIR, 'projects');
-const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, 'workspace.db');
+export const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, 'workspace.db');
 
 mkdirSync(PROJECTS_DIR, { recursive: true });
 const db = new Database(DB_PATH);

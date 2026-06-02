@@ -45,6 +45,7 @@ ai-workspace-ide/
 - `agents.ts` — только `PROMPTS`: ролевые системные промпты агентов. Сами агенты — это интерактивный `claude` в PTY (см. `terminal_create`), роль передаётся флагом `--append-system-prompt`. Отдельного chat-стриминга больше нет.
 - `projects.ts` — БД, `listProjects()` (+автообнаружение), `createProject`, `cloneRepo(url)`, `deleteProject(id)` (удаляет папку, потом запись), `getProject`. Экспортирует `PROJECTS_DIR`.
 - `git.ts` — обёртки simple-git + построение дерева файлов.
+- `telegram.ts` — опциональный Telegram-бот (long polling). Поднимается из `index.ts`, только если задан `TELEGRAM_BOT_TOKEN`. Те же роли (`PROMPTS`) и проекты, но агент запускается в **headless-режиме** (`claude -p --output-format stream-json --resume`), а не в PTY: чат привязывается к `{ projectId, agent, sessionId }` (таблица `tg_sessions` в `workspace.db`), контекст диалога держится через `--resume`. Команды: `/agent`, `/projects`, `/status`, `/reset`, `/cancel`.
 - `types.ts` — `WsMessage` и доменные типы.
 
 ### WebSocket-протокол
