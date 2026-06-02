@@ -51,6 +51,9 @@ export default function App() {
   const [repoModalOpen, setRepoModalOpen] = useState(false)
   const [confirmDeleteProj, setConfirmDeleteProj] = useState<Project | null>(null)
   const [deleting, setDeleting] = useState(false)
+  // выезжающие боковые панели на мобилке/планшете (на десктопе всегда видны)
+  const [leftOpen, setLeftOpen] = useState(false)
+  const [rightOpen, setRightOpen] = useState(false)
   const ws = useRef<WebSocket | null>(null)
   const activeRef = useRef<Project | null>(null)
   const saveRef = useRef<(uid: number) => void>(() => {})
@@ -119,6 +122,7 @@ export default function App() {
 
   function openFile(filePath: string, name: string) {
     if (!active) return
+    setLeftOpen(false)
     const existing = tabs.find(t => t.type === 'file' && t.filePath === filePath && t.ownerProject === active.id)
     if (existing) { activate(existing); return }
     axios.get<{ content: string }>(API + '/api/projects/' + active.id + '/file/' + encodeURIComponent(filePath))
@@ -127,12 +131,14 @@ export default function App() {
 
   function openTerminal() {
     if (!active) return
+    setRightOpen(false)
     const num = termCounters.current[active.id] = (termCounters.current[active.id] || 0) + 1
     pushTab({ type: 'terminal', projectId: active.id, termId: num, uid: ++uidCounter.current, ownerProject: active.id })
   }
 
   function openAgent(agentType: string) {
     if (!active) return
+    setRightOpen(false)
     const key = active.id + ':' + agentType
     const num = agentNums.current[key] = (agentNums.current[key] || 0) + 1
     pushTab({ type: 'agent', sessionId: ++sessionCounter.current, agentType, num, uid: ++uidCounter.current, ownerProject: active.id })
@@ -140,6 +146,7 @@ export default function App() {
 
   // Общий менеджер — единственный, кросс-проектный (ownerProject = null)
   function openOverseer() {
+    setRightOpen(false)
     const existing = tabs.find(t => t.type === 'agent' && t.agentType === OVERSEER)
     if (existing) { setActiveUid(existing.uid); return }
     pushTab({ type: 'agent', sessionId: ++sessionCounter.current, agentType: OVERSEER, num: 1, uid: ++uidCounter.current, ownerProject: null })
@@ -207,39 +214,52 @@ export default function App() {
       key={label}
       onClick={fn}
       style={color ? { color } : undefined}
-      className="mb-1 block w-full rounded-md border border-edge px-2.5 py-[5px] text-left text-xs text-fg transition-colors hover:bg-white/5"
+      className="flex w-full items-center rounded-lg border border-edge px-3.5 py-2.5 text-left text-sm text-fg transition-colors hover:bg-white/5 active:bg-white/10"
     >{label}</button>
   )
 
   return (
     <div className="flex h-screen flex-col bg-app text-[13px] text-fg">
       {/* Верхняя панель: проекты */}
-      <div className="flex h-[35px] flex-shrink-0 items-center gap-0.5 border-b border-edge bg-topbar px-2">
-        <span className="mr-1.5 text-[11px] text-muted">ПРОЕКТЫ</span>
-        {projects.map(p => (
-          <div
-            key={p.id}
-            onClick={() => switchProject(p)}
-            className={
-              'flex cursor-pointer items-center gap-1 rounded-md py-[3px] pl-3 pr-1.5 text-xs transition-colors ' +
-              (active?.id === p.id ? 'bg-accentbg text-white ring-1 ring-accent' : 'text-muted hover:bg-white/5')
-            }
-          >
-            <span>{p.name}</span>
-            <span
-              onClick={e => { e.stopPropagation(); setConfirmDeleteProj(p) }}
-              title="Удалить проект"
-              className="rounded px-1 text-sm leading-none opacity-60 transition hover:bg-white/15 hover:opacity-100"
-            >×</span>
-          </div>
-        ))}
-        <button onClick={addProject} className="px-1.5 text-lg text-muted transition-colors hover:text-fg">+</button>
-        <span className="ml-auto font-mono text-[11px] text-dim">{BACKEND_HOST}</span>
+      <div className="flex h-11 flex-shrink-0 items-center gap-1 border-b border-edge bg-topbar px-2">
+        <button onClick={() => setLeftOpen(o => !o)} title="Проводник" className="rounded-md px-2 py-1.5 text-lg leading-none text-muted transition-colors hover:bg-white/5 hover:text-fg lg:hidden">☰</button>
+        <span className="mr-1 hidden text-[11px] text-muted sm:inline">ПРОЕКТЫ</span>
+        <div className="flex items-center gap-1 overflow-x-auto">
+          {projects.map(p => (
+            <div
+              key={p.id}
+              onClick={() => switchProject(p)}
+              className={
+                'flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md py-1.5 pl-3 pr-2 text-sm transition-colors ' +
+                (active?.id === p.id ? 'bg-accentbg text-white ring-1 ring-accent' : 'text-muted hover:bg-white/5')
+              }
+            >
+              <span>{p.name}</span>
+              <span
+                onClick={e => { e.stopPropagation(); setConfirmDeleteProj(p) }}
+                title="Удалить проект"
+                className="rounded px-1 text-base leading-none opacity-60 transition hover:bg-white/15 hover:opacity-100"
+              >×</span>
+            </div>
+          ))}
+          <button onClick={addProject} title="Новый проект" className="px-2 text-xl leading-none text-muted transition-colors hover:text-fg">+</button>
+        </div>
+        <span className="ml-auto hidden font-mono text-[11px] text-dim md:inline">{BACKEND_HOST}</span>
+        <button onClick={() => setRightOpen(o => !o)} title="Действия" className="ml-1 rounded-md px-2 py-1.5 text-lg leading-none text-muted transition-colors hover:bg-white/5 hover:text-fg lg:hidden">⚙</button>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
+        {/* Затемнение под выехавшей панелью (мобилка/планшет) */}
+        {(leftOpen || rightOpen) && (
+          <div onClick={() => { setLeftOpen(false); setRightOpen(false) }} className="fixed inset-x-0 bottom-0 top-11 z-30 bg-black/40 lg:hidden" />
+        )}
+
         {/* Левая панель: проводник + ветки */}
-        <div className="flex w-[220px] flex-shrink-0 flex-col border-r border-edge bg-sidebar">
+        <div className={
+          'fixed bottom-0 left-0 top-11 z-40 flex w-[260px] flex-col border-r border-edge bg-sidebar transition-transform duration-200 ' +
+          'lg:static lg:top-auto lg:z-auto lg:w-[240px] lg:translate-x-0 lg:shadow-none ' +
+          (leftOpen ? 'translate-x-0 shadow-2xl shadow-black/50' : '-translate-x-full')
+        }>
           <div className="flex-shrink-0 border-b border-edge px-3 py-1.5 text-[11px] font-semibold tracking-[0.08em] text-muted">
             ПРОВОДНИК {active && <span className="font-normal text-dim">— {active.name}</span>}
           </div>
@@ -258,18 +278,18 @@ export default function App() {
 
         {/* Центр: вкладки + контент */}
         <div className="flex flex-1 flex-col overflow-hidden">
-          <div className="flex h-[35px] flex-shrink-0 items-end overflow-x-auto border-b border-edge bg-sidebar">
+          <div className="flex h-10 flex-shrink-0 items-end overflow-x-auto border-b border-edge bg-sidebar">
             {visibleTabs.map(tab => (
               <div
                 key={tab.uid}
                 onClick={() => activate(tab)}
                 className={
-                  'flex h-[35px] flex-shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-t border-edge px-3.5 text-[13px] transition-colors ' +
+                  'flex h-10 flex-shrink-0 cursor-pointer select-none items-center gap-2 border-r border-t-2 border-edge px-4 text-[13px] transition-colors ' +
                   (activeUid === tab.uid ? 'border-t-accent bg-app text-fg' : 'border-t-transparent text-muted hover:bg-white/5')
                 }
               >
                 <span>{tabLabel(tab)}</span>
-                <span onClick={e => closeTab(tab.uid, e)} className="text-base leading-none text-dim transition-colors hover:text-fg">×</span>
+                <span onClick={e => closeTab(tab.uid, e)} className="rounded px-1 text-lg leading-none text-dim transition-colors hover:bg-white/10 hover:text-fg">×</span>
               </div>
             ))}
           </div>
@@ -355,7 +375,11 @@ export default function App() {
         </div>
 
         {/* Правая панель: git, сервер, действия */}
-        <div className="flex w-[220px] flex-shrink-0 flex-col border-l border-edge bg-sidebar">
+        <div className={
+          'fixed bottom-0 right-0 top-11 z-40 flex w-[280px] max-w-[88vw] flex-col overflow-y-auto border-l border-edge bg-sidebar transition-transform duration-200 ' +
+          'lg:static lg:top-auto lg:z-auto lg:w-[240px] lg:max-w-none lg:translate-x-0 lg:overflow-visible lg:shadow-none ' +
+          (rightOpen ? 'translate-x-0 shadow-2xl shadow-black/50' : 'translate-x-full')
+        }>
           <div className={sectionCls + ' border-b border-edge'}>SOURCE CONTROL</div>
           <div className="max-h-[180px] overflow-y-auto p-2">
             {log.length === 0 && <div className="px-1 py-0.5 text-xs text-dim">Нет коммитов</div>}
@@ -374,7 +398,7 @@ export default function App() {
           </div>
 
           <div className={sectionCls + ' border-t border-edge'}>ГЛОБАЛЬНО</div>
-          <div className="p-2">
+          <div className="flex flex-col gap-2 p-3">
             {actionBtn('🧭 Общий менеджер', openOverseer, agentColors.overseer)}
             {actionBtn('➕ Добавить репозиторий', () => setRepoModalOpen(true))}
           </div>
