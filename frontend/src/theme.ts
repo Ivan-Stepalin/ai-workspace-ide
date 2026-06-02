@@ -5,7 +5,9 @@ export const C = {
   green: '#4ec9b0', yellow: '#dcdcaa', btnHover: '#2a2d2e',
 }
 
-export const agentColors: Record<string, string> = { manager: '#569cd6', coder: '#4ec9b0', reviewer: '#dcdcaa' }
+export const agentColors: Record<string, string> = { manager: '#569cd6', coder: '#4ec9b0', reviewer: '#dcdcaa', overseer: '#c586c0' }
+
+export const OVERSEER = 'overseer'
 
 export const statusLabels: Record<string, string> = {
   thinking: '🤔 Думает...', responding: '✍️ Пишет ответ...',
@@ -19,6 +21,7 @@ export const AGENTS: { type: string; label: string }[] = [
   { type: 'reviewer', label: 'Ревьюер' },
 ]
 
-export const agentLabel = (type: string): string => AGENTS.find(a => a.type === type)?.label || type
+export const agentLabel = (type: string): string =>
+  type === OVERSEER ? 'Общий менеджер' : (AGENTS.find(a => a.type === type)?.label || type)
 
 export type Message = { role: 'user' | 'agent'; text: string; agent?: string; streaming?: boolean }

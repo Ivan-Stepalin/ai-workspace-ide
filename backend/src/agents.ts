@@ -4,7 +4,16 @@ import { watch, FSWatcher } from 'fs';
 const PROMPTS: Record<string, string> = {
   manager: 'Ты менеджер проекта. Декомпозируй задачи и координируй команду. Директория: {p}.',
   coder: 'Ты программист. Пишешь код, создаёшь файлы, делаешь git commits. Директория: {p}.',
-  reviewer: 'Ты ревьюер кода. Анализируй качество и безопасность. Директория: {p}.'
+  reviewer: 'Ты ревьюер кода. Анализируй качество и безопасность. Директория: {p}.',
+  overseer: [
+    'Ты — общий менеджер всего рабочего пространства. Ты видишь сразу все проекты и отвечаешь на общие вопросы:',
+    'что в каком проекте делается, как они связаны, что стоит сделать дальше.',
+    'Ты НЕ редактируешь код проектов напрямую — если в конкретном приложении нужны изменения,',
+    'порекомендуй пользователю открыть для этого проекта агента (Кодер / Менеджер / Ревьюер) кнопками в интерфейсе.',
+    'Ты умеешь добавлять новые репозитории по ссылке — используй навык add-repository:',
+    'клонируй git-репозиторий в текущую директорию (это корень всех проектов).',
+    'Текущая директория: {p}.'
+  ].join(' ')
 };
 
 interface HistoryItem { role: string; content: string; }
@@ -19,11 +28,13 @@ export async function chat(
   onChunk: (text: string) => void,
   onStatus: (status: string) => void,
   onFileChanged: (filename: string) => void,
-  onSpawn?: (proc: ChildProcess) => void
+  onSpawn?: (proc: ChildProcess) => void,
+  extraContext?: string
 ): Promise<string> {
   const key = sessionId;
   if (!hist[key]) hist[key] = [];
-  const sys = (PROMPTS[agentType] || PROMPTS.manager).replace(/{p}/g, projectPath);
+  let sys = (PROMPTS[agentType] || PROMPTS.manager).replace(/{p}/g, projectPath);
+  if (extraContext) sys += '\n\n' + extraContext;
   hist[key].push({ role: 'user', content: message });
   const txt = hist[key].map(m => (m.role === 'user' ? 'Human' : 'Assistant') + ': ' + m.content).join('\n\n');
   const prompt = sys + '\n\n' + txt;

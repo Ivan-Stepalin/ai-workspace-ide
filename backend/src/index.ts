@@ -4,12 +4,12 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'http';
 import cors from 'cors';
 import { spawn, ChildProcess } from 'child_process';
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, renameSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, renameSync, cpSync } from 'fs';
 import path from 'path';
 import * as pty from 'node-pty';
 import { chat, clearSession } from './agents.js';
 import { getLog, getBranches, commitAll, pushRepo, getFiles, getFileTree } from './git.js';
-import { listProjects, createProject, getProject } from './projects.js';
+import { listProjects, createProject, getProject, cloneRepo, PROJECTS_DIR } from './projects.js';
 import { WsMessage } from './types.js';
 
 const app = express();
@@ -60,8 +60,46 @@ function buildRunCommand(projectPath: string, port: number): string {
   return `python3 -m http.server ${port} --bind 0.0.0.0`;
 }
 
+// Общий менеджер запускается с cwd = PROJECTS_DIR. Чтобы claude CLI подхватил навыки,
+// копируем их из репозитория (backend/skills) в PROJECTS_DIR/.claude/skills при старте.
+function syncManagerSkills(): void {
+  try {
+    const src = path.resolve('skills');
+    if (!existsSync(src)) return;
+    const dest = path.join(PROJECTS_DIR, '.claude', 'skills');
+    mkdirSync(dest, { recursive: true });
+    cpSync(src, dest, { recursive: true });
+  } catch (e) { console.error('skill sync failed:', e); }
+}
+
+// Сводка по всем проектам для общего менеджера: верхний уровень файлов, последние коммиты, выжимка README.
+async function buildOverseerContext(): Promise<string> {
+  const projects = listProjects();
+  if (!projects.length) return 'Сейчас в рабочем пространстве нет ни одного проекта.';
+  const parts: string[] = [];
+  for (const p of projects) {
+    let readme = '';
+    for (const f of ['README.md', 'readme.md', 'README']) {
+      const rp = path.join(p.path, f);
+      if (existsSync(rp)) { readme = readFileSync(rp, 'utf-8').slice(0, 300).replace(/\s+/g, ' '); break; }
+    }
+    let commits = '';
+    try { commits = (await getLog(p.path)).slice(0, 3).map(c => c.hash + ' ' + c.message).join('; '); } catch { /* нет git */ }
+    const tree = getFileTree(p.path).slice(0, 12).map(n => n.name).join(', ');
+    parts.push(`### ${p.name} (id: ${p.id})\nВерхний уровень: ${tree || '—'}\nПоследние коммиты: ${commits || '—'}\nREADME: ${readme || '—'}`);
+  }
+  return 'КОНТЕКСТ — текущие проекты в рабочем пространстве:\n\n' + parts.join('\n\n');
+}
+
 app.get('/api/projects', (_req, res) => res.json(listProjects()));
 app.post('/api/projects', async (req, res) => { const proj = await createProject(req.body.name); res.json(proj); });
+app.post('/api/projects/clone', async (req, res) => {
+  try {
+    const proj = await cloneRepo(req.body.url, req.body.name);
+    broadcast({ type: 'projects_updated' });
+    res.json(proj);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
 app.get('/api/projects/:id/log', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json([]); res.json(await getLog(p.path)); });
 app.get('/api/projects/:id/branches', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json({ all: [], current: '' }); res.json(await getBranches(p.path)); });
 app.get('/api/projects/:id/files', (req, res) => { const p = getProject(req.params.id); if (!p) return res.json([]); res.json(getFiles(p.path)); });
@@ -223,10 +261,32 @@ wss.on('connection', ws => {
       }
 
       const { type, agent, message, projectId, sessionId } = msg;
-      if (type !== 'chat' || !agent || !message || !projectId || sessionId === undefined) return;
+      if (type !== 'chat' || !agent || !message || sessionId === undefined) return;
+      const sid = String(sessionId);
+
+      // Общий менеджер: работает не в одном проекте, а в корне всех проектов,
+      // получает сводку по всем проектам и умеет клонировать репозитории (навык add-repository).
+      if (agent === 'overseer') {
+        const context = await buildOverseerContext();
+        ws.send(JSON.stringify({ type: 'chunk_start', agent, sessionId }));
+        await chat(
+          sid, agent, message, PROJECTS_DIR,
+          text => ws.send(JSON.stringify({ type: 'chunk', agent, text, sessionId })),
+          status => ws.send(JSON.stringify({ type: 'agent_status', agent, status, sessionId })),
+          () => { /* изменения в корне проектов не транслируем как дерево */ },
+          proc => agentProcs.set(sid, proc),
+          context
+        );
+        agentProcs.delete(sid);
+        ws.send(JSON.stringify({ type: 'chunk_end', agent, sessionId }));
+        // менеджер мог склонировать репозиторий — обновим список проектов у клиентов
+        broadcast({ type: 'projects_updated' });
+        return;
+      }
+
+      if (!projectId) return;
       const p = getProject(projectId);
       if (!p) return;
-      const sid = String(sessionId);
 
       ws.send(JSON.stringify({ type: 'chunk_start', agent, sessionId }));
       await chat(
@@ -259,4 +319,5 @@ wss.on('connection', ws => {
 });
 
 const SERVER_PORT = Number(process.env.PORT || 3001);
+syncManagerSkills();
 server.listen(SERVER_PORT, '0.0.0.0', () => console.log('Backend running on :' + SERVER_PORT));

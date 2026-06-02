@@ -4,7 +4,7 @@ import Editor, { loader } from '@monaco-editor/react'
 import FileTree, { FileNode } from './FileTree'
 import TerminalPanel from './Terminal'
 import AgentSession from './AgentSession'
-import { C, agentColors, AGENTS, agentLabel, Message } from './theme'
+import { C, agentColors, AGENTS, agentLabel, OVERSEER, Message } from './theme'
 import { API, WS_URL, BACKEND_HOST } from './config'
 
 loader.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs' } })
@@ -29,7 +29,7 @@ function getLang(filename: string): string {
 }
 
 function tabLabel(tab: Tab): string {
-  if (tab.type === 'agent') return '🤖 ' + agentLabel(tab.agentType) + ' ' + tab.num
+  if (tab.type === 'agent') return tab.agentType === OVERSEER ? '🧭 Общий менеджер' : '🤖 ' + agentLabel(tab.agentType) + ' ' + tab.num
   if (tab.type === 'terminal') return '⌨ Терминал ' + tab.termId
   return (tab.dirty ? '● ' : '') + tab.name
 }
@@ -93,6 +93,7 @@ export default function App() {
         setStreaming(prev => ({ ...prev, [k]: false }))
         setMessages(prev => ({ ...prev, [k]: (prev[k] || []).map(m => ({ ...m, streaming: false })) }))
       }
+      if (data.type === 'projects_updated') axios.get<Project[]>(API + '/api/projects').then(r => setProjects(r.data))
       if (data.type === 'build_status') setBuild(prev => ({ ...prev, [data.project]: data }))
       if (data.type === 'tree_updated' && data.projectId === activeRef.current?.id) setTree(data.tree)
       if (data.type === 'file_changed') {
@@ -111,11 +112,13 @@ export default function App() {
   }
 
   function switchProject(proj: Project) {
-    // закрываем все открытые сессии агентов текущего проекта на бэкенде
-    tabs.forEach(t => { if (t.type === 'agent') closeAgentSession(t.sessionId) })
+    // Общий менеджер кросс-проектный — его вкладки сохраняем при смене проекта;
+    // сессии конкретного проекта (и файлы/терминалы) закрываем.
+    const keep = tabs.filter(t => t.type === 'agent' && t.agentType === OVERSEER)
+    tabs.forEach(t => { if (t.type === 'agent' && t.agentType !== OVERSEER) closeAgentSession(t.sessionId) })
     setActive(proj)
     activeRef.current = proj
-    setTabs([])
+    setTabs(keep)
     setActiveTab(0)
     termCounter.current = 0
     agentNums.current = {}
@@ -149,6 +152,22 @@ export default function App() {
     setTabs(prev => { const next = [...prev, newTab]; setActiveTab(next.length - 1); return next })
   }
 
+  // Общий менеджер — единственный, кросс-проектный, не требует активного проекта
+  function openOverseer() {
+    const existing = tabs.findIndex(t => t.type === 'agent' && t.agentType === OVERSEER)
+    if (existing >= 0) { setActiveTab(existing); return }
+    const newTab: Tab = { type: 'agent', sessionId: ++sessionCounter.current, agentType: OVERSEER, num: 1 }
+    setTabs(prev => { const next = [...prev, newTab]; setActiveTab(next.length - 1); return next })
+  }
+
+  function addRepo() {
+    const url = prompt('URL git-репозитория для клонирования:')
+    if (!url) return
+    axios.post<Project>(API + '/api/projects/clone', { url })
+      .then(r => { setProjects(p => p.some(x => x.id === r.data.id) ? p : [...p, r.data]); switchProject(r.data) })
+      .catch(e => alert('Не удалось склонировать: ' + (e?.response?.data?.error || e)))
+  }
+
   function saveFile(tabIndex: number) {
     const tab = tabs[tabIndex]
     if (!active || tab.type !== 'file') return
@@ -175,11 +194,13 @@ export default function App() {
   }
 
   function sendMessage(sessionId: number, agentType: string) {
-    if (!active) return
     const text = (inputs[sessionId] || '').trim()
     if (!text || streaming[sessionId]) return
+    // общий менеджер не привязан к проекту; остальным нужен активный проект
+    const projectId = agentType === OVERSEER ? OVERSEER : active?.id
+    if (!projectId) return
     setMessages(prev => ({ ...prev, [sessionId]: [...(prev[sessionId] || []), { role: 'user', text }] }))
-    ws.current?.send(JSON.stringify({ type: 'chat', sessionId, agent: agentType, message: text, projectId: active.id }))
+    ws.current?.send(JSON.stringify({ type: 'chat', sessionId, agent: agentType, message: text, projectId }))
     setInputs(prev => ({ ...prev, [sessionId]: '' }))
   }
 
@@ -334,7 +355,12 @@ export default function App() {
             <span style={{ width: 8, height: 8, borderRadius: '50%', background: buildInfo?.running ? C.green : C.textDim, display: 'inline-block' }}></span>
             <span style={{ fontSize: 12, color: buildInfo?.running ? C.green : C.textDim }}>{buildInfo?.running ? ':' + buildInfo.port + ' запущен' : 'остановлен'}</span>
           </div>
-          <div style={{ padding: '8px 12px 4px', fontSize: 11, color: C.textMuted, fontWeight: 600, letterSpacing: '0.08em', borderTop: '1px solid ' + C.border }}>ДЕЙСТВИЯ</div>
+          <div style={{ padding: '8px 12px 4px', fontSize: 11, color: C.textMuted, fontWeight: 600, letterSpacing: '0.08em', borderTop: '1px solid ' + C.border }}>ГЛОБАЛЬНО</div>
+          <div style={{ padding: '8px' }}>
+            {actionBtn('🧭 Общий менеджер', openOverseer, agentColors.overseer)}
+            {actionBtn('➕ Добавить репозиторий', addRepo)}
+          </div>
+          <div style={{ padding: '8px 12px 4px', fontSize: 11, color: C.textMuted, fontWeight: 600, letterSpacing: '0.08em', borderTop: '1px solid ' + C.border }}>ДЕЙСТВИЯ {active && <span style={{ color: C.textDim, fontWeight: 400 }}>— {active.name}</span>}</div>
           <div style={{ padding: '8px' }}>
             {AGENTS.map(a => actionBtn('🤖 ' + a.label, () => openAgent(a.type), agentColors[a.type]))}
             {actionBtn('⌨ Терминал', openTerminal)}
