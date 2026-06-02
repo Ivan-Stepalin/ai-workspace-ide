@@ -19,8 +19,27 @@ app.use(express.json());
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
 const runningBuilds: Record<string, ChildProcess> = {};
-const terminals: Record<string, ReturnType<typeof pty.spawn>> = {};
-let terminalSeq = 0;
+
+// Терминалы/агенты переживают разрыв WS: PTY держится живым по стабильному id,
+// вывод копится в буфере, при переподключении буфер переотдаётся. GC убивает отвязанные сессии.
+const DETACH_GC_MS = 10 * 60 * 1000;   // через сколько убить отвязанный терминал
+const BUF_CAP = 256 * 1024;            // размер буфера вывода
+interface Term {
+  pty: ReturnType<typeof pty.spawn>;
+  buffer: string;
+  ws: WebSocket | null;
+  killTimer: ReturnType<typeof setTimeout> | null;
+  agent?: string;
+}
+const terminals: Record<string, Term> = {};
+
+function killTerminal(id: string): void {
+  const t = terminals[id];
+  if (!t) return;
+  if (t.killTimer) clearTimeout(t.killTimer);
+  try { t.pty.kill(); } catch { /* ignore */ }
+  delete terminals[id];
+}
 
 function broadcast(data: object): void {
   const msg = JSON.stringify(data);
@@ -193,8 +212,6 @@ app.post('/api/projects/:id/build/stop', (req, res) => {
 });
 
 wss.on('connection', ws => {
-  let terminalId: string | null = null;
-
   ws.on('message', async (raw: Buffer) => {
     try {
       const msg = JSON.parse(raw.toString()) as WsMessage;
@@ -212,8 +229,18 @@ wss.on('connection', ws => {
           if (!p) return;
           cwd = p.path;
         }
-        const id = (msg.projectId || agent || 'term') + '_' + Date.now() + '_' + (++terminalSeq);
-        terminalId = id;
+        const id = msg.terminalId || ('term_' + Date.now() + '_' + Math.random().toString(36).slice(2));
+
+        // Переподключение к живой сессии: гасим GC, перевязываем ws, переотдаём буфер вывода
+        const existing = terminals[id];
+        if (existing) {
+          if (existing.killTimer) { clearTimeout(existing.killTimer); existing.killTimer = null; }
+          existing.ws = ws;
+          try { existing.pty.resize(msg.cols || 120, msg.rows || 30); } catch { /* ignore */ }
+          ws.send(JSON.stringify({ type: 'terminal_ready', terminalId: id }));
+          if (existing.buffer) ws.send(JSON.stringify({ type: 'terminal_data', data: existing.buffer, terminalId: id }));
+          return;
+        }
 
         let cmd = 'bash';
         let args: string[] = [];
@@ -223,19 +250,22 @@ wss.on('connection', ws => {
           args = ['--append-system-prompt', sys, '--dangerously-skip-permissions'];
         }
 
-        const term = pty.spawn(cmd, args, {
+        const proc = pty.spawn(cmd, args, {
           name: 'xterm-256color',
           cols: msg.cols || 120,
           rows: msg.rows || 30,
           cwd,
           env: { ...process.env, TERM: 'xterm-256color' } as Record<string, string>,
         });
-        terminals[id] = term;
-        term.onData(data => {
-          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'terminal_data', data, terminalId: id }));
+        const t: Term = { pty: proc, buffer: '', ws, killTimer: null, agent };
+        terminals[id] = t;
+        proc.onData(data => {
+          t.buffer = (t.buffer + data).slice(-BUF_CAP);
+          if (t.ws && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ type: 'terminal_data', data, terminalId: id }));
         });
-        term.onExit(() => {
-          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'terminal_exit', terminalId: id }));
+        proc.onExit(() => {
+          if (t.ws && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ type: 'terminal_exit', terminalId: id }));
+          if (t.killTimer) clearTimeout(t.killTimer);
           delete terminals[id];
           // агент мог склонировать репозиторий / изменить файлы — обновим список проектов
           if (agent) broadcast({ type: 'projects_updated' });
@@ -245,12 +275,18 @@ wss.on('connection', ws => {
       }
 
       if (msg.type === 'terminal_input' && msg.terminalId && terminals[msg.terminalId]) {
-        terminals[msg.terminalId].write(msg.data || '');
+        terminals[msg.terminalId].pty.write(msg.data || '');
         return;
       }
 
       if (msg.type === 'terminal_resize' && msg.terminalId && terminals[msg.terminalId]) {
-        terminals[msg.terminalId].resize(msg.cols || 120, msg.rows || 30);
+        terminals[msg.terminalId].pty.resize(msg.cols || 120, msg.rows || 30);
+        return;
+      }
+
+      // Явное закрытие вкладки пользователем — убиваем PTY сразу (иначе ждал бы GC)
+      if (msg.type === 'terminal_close' && msg.terminalId) {
+        killTerminal(msg.terminalId);
         return;
       }
 
@@ -266,9 +302,14 @@ wss.on('connection', ws => {
   });
 
   ws.on('close', () => {
-    if (terminalId && terminals[terminalId]) {
-      terminals[terminalId].kill();
-      delete terminals[terminalId];
+    // не убиваем терминалы сразу — даём шанс переподключиться (новая вкладка/перезагрузка); GC уберёт через DETACH_GC_MS
+    for (const id in terminals) {
+      const t = terminals[id];
+      if (t.ws === ws) {
+        t.ws = null;
+        if (t.killTimer) clearTimeout(t.killTimer);
+        t.killTimer = setTimeout(() => killTerminal(id), DETACH_GC_MS);
+      }
     }
   });
 });

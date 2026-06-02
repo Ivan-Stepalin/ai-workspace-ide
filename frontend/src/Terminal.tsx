@@ -8,10 +8,11 @@ import { WS_URL } from './config'
 interface Props {
   projectId: string
   agent?: string            // если задан — в PTY запускается claude этой роли вместо bash
+  wsId: string              // стабильный id сессии — для переподключения к живому PTY после reload/новой вкладки
   onFileSystemChange?: () => void
 }
 
-export default function TerminalPanel({ projectId, agent, onFileSystemChange }: Props) {
+export default function TerminalPanel({ projectId, agent, wsId, onFileSystemChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const termRef = useRef<XTerm | null>(null)
@@ -79,6 +80,7 @@ export default function TerminalPanel({ projectId, agent, onFileSystemChange }: 
         fitAddon.fit()
         ws.send(JSON.stringify({
           type: 'terminal_create',
+          terminalId: wsId,
           projectId,
           agent,
           cols: term.cols,
@@ -144,7 +146,7 @@ export default function TerminalPanel({ projectId, agent, onFileSystemChange }: 
       termRef.current = null
       initializedRef.current = false
     }
-  }, [projectId, agent, send, triggerFsUpdate])
+  }, [projectId, agent, wsId, send, triggerFsUpdate])
 
   return (
     <div className="h-full w-full overflow-hidden bg-app">

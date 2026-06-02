@@ -16,10 +16,26 @@ type GitCommit = { hash: string; message: string; date: string }
 type GitBranches = { all: string[]; current: string }
 type BuildInfo = { running: boolean; port?: number; project: string }
 // uid — уникальный id вкладки (стабильный ключ); ownerProject — проект-владелец (null = глобальная, напр. общий менеджер)
+// wsId — стабильный id PTY-сессии: по нему фронт переподключается к живому терминалу/агенту после reload/новой вкладки
 type Tab =
-  | { uid: number; ownerProject: string | null; type: 'agent'; sessionId: number; agentType: string; num: number }
+  | { uid: number; ownerProject: string | null; type: 'agent'; sessionId: number; agentType: string; num: number; wsId: string }
   | { uid: number; ownerProject: string | null; type: 'file'; name: string; filePath: string; content: string; dirty: boolean }
-  | { uid: number; ownerProject: string | null; type: 'terminal'; projectId: string; termId: number }
+  | { uid: number; ownerProject: string | null; type: 'terminal'; projectId: string; termId: number; wsId: string }
+
+const newId = (): string =>
+  (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)
+
+// Сохранение/восстановление сессии (список вкладок + активный проект) в localStorage
+const LS_KEY = 'aiws.session.v1'
+type Persisted = { activeId: string | null; activeUid: number | null; lastActive: Record<string, number>; tabs: Tab[] }
+function loadPersisted(): Persisted {
+  try {
+    const raw = localStorage.getItem(LS_KEY)
+    if (raw) return JSON.parse(raw) as Persisted
+  } catch { /* ignore */ }
+  return { activeId: null, activeUid: null, lastActive: {}, tabs: [] }
+}
+const persisted = loadPersisted()
 
 function getLang(filename: string): string {
   const ext = filename.split('.').pop() || ''
@@ -47,8 +63,8 @@ export default function App() {
   const [branches, setBranches] = useState<GitBranches>({ all: [], current: '' })
   const [log, setLog] = useState<GitCommit[]>([])
   const [build, setBuild] = useState<Record<string, BuildInfo>>({})
-  const [tabs, setTabs] = useState<Tab[]>([])
-  const [activeUid, setActiveUid] = useState<number | null>(null)
+  const [tabs, setTabs] = useState<Tab[]>(persisted.tabs)
+  const [activeUid, setActiveUid] = useState<number | null>(persisted.activeUid)
   const [repoModalOpen, setRepoModalOpen] = useState(false)
   const [confirmDeleteProj, setConfirmDeleteProj] = useState<Project | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -60,11 +76,20 @@ export default function App() {
   const ws = useRef<WebSocket | null>(null)
   const activeRef = useRef<Project | null>(null)
   const saveRef = useRef<(uid: number) => void>(() => {})
-  const uidCounter = useRef(0)
-  const sessionCounter = useRef(0)
-  const agentNums = useRef<Record<string, number>>({})       // `${projectId}:${agentType}` -> номер
-  const termCounters = useRef<Record<string, number>>({})    // projectId -> номер терминала
-  const lastActiveByProject = useRef<Record<string, number>>({}) // projectId -> uid последней активной вкладки
+  // счётчики восстанавливаем из сохранённых вкладок, чтобы id не конфликтовали
+  const uidCounter = useRef(persisted.tabs.reduce((m, t) => Math.max(m, t.uid), 0))
+  const sessionCounter = useRef(persisted.tabs.reduce((m, t) => Math.max(m, t.type === 'agent' ? t.sessionId : 0), 0))
+  const agentNums = useRef<Record<string, number>>((() => {
+    const m: Record<string, number> = {}
+    for (const t of persisted.tabs) if (t.type === 'agent' && t.ownerProject) { const k = t.ownerProject + ':' + t.agentType; m[k] = Math.max(m[k] || 0, t.num) }
+    return m
+  })())
+  const termCounters = useRef<Record<string, number>>((() => {
+    const m: Record<string, number> = {}
+    for (const t of persisted.tabs) if (t.type === 'terminal') m[t.ownerProject!] = Math.max(m[t.ownerProject!] || 0, t.termId)
+    return m
+  })())
+  const lastActiveByProject = useRef<Record<string, number>>(persisted.lastActive || {})
 
   const refreshTree = useCallback((projId?: string) => {
     const id = projId || activeRef.current?.id
@@ -75,7 +100,35 @@ export default function App() {
   useEffect(() => {
     axios.get<Project[]>(API + '/api/projects').then(r => {
       setProjects(r.data)
-      if (r.data.length > 0) switchProject(r.data[0])
+      const exists = (pid: string | null) => pid === null || r.data.some(p => p.id === pid)
+      // убираем вкладки несуществующих проектов (могли удалить между сессиями)
+      const liveTabs = persisted.tabs.filter(t => exists(t.ownerProject))
+      setTabs(liveTabs)
+      // восстанавливаем активный проект из сохранённого (или первый)
+      const act = r.data.find(p => p.id === persisted.activeId) || r.data[0] || null
+      if (act) {
+        setActive(act)
+        activeRef.current = act
+        // сверяем активную вкладку: если её больше нет (проект удалён) — берём последнюю активную / первую вкладку проекта
+        const visible = (uid: number | null) => liveTabs.some(t => t.uid === uid && (t.ownerProject === null || t.ownerProject === act.id))
+        if (!visible(persisted.activeUid)) {
+          const remembered = lastActiveByProject.current[act.id]
+          const fallback = liveTabs.find(t => t.uid === remembered && t.ownerProject === act.id)
+            || liveTabs.find(t => t.ownerProject === act.id || t.ownerProject === null)
+          setActiveUid(fallback ? fallback.uid : null)
+        }
+        axios.get<FileNode[]>(API + '/api/projects/' + act.id + '/tree').then(t => setTree(t.data))
+        axios.get<GitBranches>(API + '/api/projects/' + act.id + '/branches').then(t => setBranches(t.data))
+        axios.get<GitCommit[]>(API + '/api/projects/' + act.id + '/log').then(t => setLog(t.data))
+      }
+      // дозагружаем содержимое восстановленных файловых вкладок (контент не персистится)
+      for (const t of persisted.tabs) {
+        if (t.type === 'file' && exists(t.ownerProject)) {
+          axios.get<{ content: string }>(API + '/api/projects/' + t.ownerProject + '/file/' + encodeURIComponent(t.filePath))
+            .then(c => setTabs(ts => ts.map(x => x.uid === t.uid && x.type === 'file' ? { ...x, content: c.data.content, dirty: false } : x)))
+            .catch(() => { /* файл мог исчезнуть */ })
+        }
+      }
     })
     const socket = new WebSocket(WS_URL)
     ws.current = socket
@@ -96,6 +149,13 @@ export default function App() {
       }
     }
   }, [])
+
+  // сохраняем сессию (список вкладок + активный проект) в localStorage; содержимое файлов не храним
+  useEffect(() => {
+    const slim = tabs.map(t => t.type === 'file' ? { ...t, content: '' } : t)
+    const data: Persisted = { activeId: active?.id ?? null, activeUid, lastActive: lastActiveByProject.current, tabs: slim }
+    try { localStorage.setItem(LS_KEY, JSON.stringify(data)) } catch { /* ignore */ }
+  }, [tabs, activeUid, active])
 
   // активировать вкладку (и запомнить как последнюю активную для её проекта)
   function activate(tab: Tab) {
@@ -136,7 +196,7 @@ export default function App() {
     if (!active) return
     setRightOpen(false)
     const num = termCounters.current[active.id] = (termCounters.current[active.id] || 0) + 1
-    pushTab({ type: 'terminal', projectId: active.id, termId: num, uid: ++uidCounter.current, ownerProject: active.id })
+    pushTab({ type: 'terminal', projectId: active.id, termId: num, uid: ++uidCounter.current, ownerProject: active.id, wsId: newId() })
   }
 
   function openAgent(agentType: string) {
@@ -144,7 +204,7 @@ export default function App() {
     setRightOpen(false)
     const key = active.id + ':' + agentType
     const num = agentNums.current[key] = (agentNums.current[key] || 0) + 1
-    pushTab({ type: 'agent', sessionId: ++sessionCounter.current, agentType, num, uid: ++uidCounter.current, ownerProject: active.id })
+    pushTab({ type: 'agent', sessionId: ++sessionCounter.current, agentType, num, uid: ++uidCounter.current, ownerProject: active.id, wsId: newId() })
   }
 
   // Общий менеджер — единственный, кросс-проектный (ownerProject = null)
@@ -152,7 +212,7 @@ export default function App() {
     setRightOpen(false)
     const existing = tabs.find(t => t.type === 'agent' && t.agentType === OVERSEER)
     if (existing) { setActiveUid(existing.uid); return }
-    pushTab({ type: 'agent', sessionId: ++sessionCounter.current, agentType: OVERSEER, num: 1, uid: ++uidCounter.current, ownerProject: null })
+    pushTab({ type: 'agent', sessionId: ++sessionCounter.current, agentType: OVERSEER, num: 1, uid: ++uidCounter.current, ownerProject: null, wsId: newId() })
   }
 
   function onRepoAdded(proj: Project) {
@@ -167,7 +227,8 @@ export default function App() {
       .then(() => {
         setDeleting(false)
         setConfirmDeleteProj(null)
-        // убираем вкладки удаляемого проекта (их терминалы/агенты гаснут при размонтировании)
+        // гасим PTY терминалов/агентов удаляемого проекта и убираем его вкладки
+        tabs.forEach(t => { if (t.ownerProject === proj.id && (t.type === 'agent' || t.type === 'terminal')) ws.current?.send(JSON.stringify({ type: 'terminal_close', terminalId: t.wsId })) })
         setTabs(prev => prev.filter(t => t.ownerProject !== proj.id))
         const remaining = projects.filter(p => p.id !== proj.id)
         setProjects(remaining)
@@ -192,6 +253,11 @@ export default function App() {
 
   function closeTab(uid: number, e: React.MouseEvent) {
     e.stopPropagation()
+    // закрытие вкладки пользователем = завершить сессию: гасим PTY сразу (а не оставляем для reattach)
+    const tab = tabs.find(t => t.uid === uid)
+    if (tab && (tab.type === 'agent' || tab.type === 'terminal')) {
+      ws.current?.send(JSON.stringify({ type: 'terminal_close', terminalId: tab.wsId }))
+    }
     setTabs(prev => prev.filter(t => t.uid !== uid))
     if (activeUid === uid) {
       const rest = tabs.filter(t => t.uid !== uid && (t.ownerProject === null || t.ownerProject === active?.id))
@@ -320,6 +386,7 @@ export default function App() {
                 <TerminalPanel
                   projectId={tab.ownerProject || ''}
                   agent={tab.agentType}
+                  wsId={tab.wsId}
                   onFileSystemChange={() => {
                     if (tab.ownerProject) refreshTree(tab.ownerProject)
                     else axios.get<Project[]>(API + '/api/projects').then(r => setProjects(r.data))
@@ -377,7 +444,7 @@ export default function App() {
 
             {tabs.map(tab => tab.type !== 'terminal' ? null : (
               <div key={tab.uid} className="absolute inset-0 bg-app" style={{ display: activeUid === tab.uid ? 'block' : 'none' }}>
-                <TerminalPanel projectId={tab.projectId} onFileSystemChange={() => refreshTree(tab.projectId)} />
+                <TerminalPanel projectId={tab.projectId} wsId={tab.wsId} onFileSystemChange={() => refreshTree(tab.projectId)} />
               </div>
             ))}
           </div>
