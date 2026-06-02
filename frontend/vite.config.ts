@@ -1,22 +1,28 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import basicSsl from '@vitejs/plugin-basic-ssl'
 import { VitePWA } from 'vite-plugin-pwa'
+import fs from 'fs'
+
+// Доверенный HTTPS через mkcert (certs/), если сертификаты есть — нужен для установки PWA на телефоне
+// (secure-context с доверенным сертификатом). Без них dev поднимется по http (localhost тоже secure-context).
+const certDir = 'certs'
+const https = fs.existsSync(`${certDir}/key.pem`) && fs.existsSync(`${certDir}/cert.pem`)
+  ? { key: fs.readFileSync(`${certDir}/key.pem`), cert: fs.readFileSync(`${certDir}/cert.pem`) }
+  : undefined
+
+// Бэкенд проксируется с того же origin, чтобы не было mixed-content (https-страница → http-бэкенд).
+const proxy = {
+  '/api': { target: 'http://localhost:3001', changeOrigin: true },
+  '/ws': { target: 'ws://localhost:3001', ws: true, rewrite: (p: string) => p.replace(/^\/ws/, '') },
+}
 
 // https://vite.dev/config/
 export default defineConfig({
-  // HTTPS (самоподписанный) — нужен для secure-context: PWA-установка, service worker, буфер обмена.
-  // Бэкенд проксируется с того же origin, чтобы не было mixed-content (https-страница → http-бэкенд).
-  server: {
-    host: true,
-    proxy: {
-      '/api': { target: 'http://localhost:3001', changeOrigin: true },
-      '/ws': { target: 'ws://localhost:3001', ws: true, rewrite: p => p.replace(/^\/ws/, '') },
-    },
-  },
+  server: { host: true, https, proxy },
+  // production-сборка (npm run build && npm run preview) — настоящий PWA, тоже по https с прокси
+  preview: { host: true, https, proxy },
   plugins: [
-    basicSsl(),
     react(),
     tailwindcss(),
     VitePWA({
