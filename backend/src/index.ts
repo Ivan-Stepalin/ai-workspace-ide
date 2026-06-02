@@ -3,7 +3,6 @@ import express from 'express';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'http';
 import cors from 'cors';
-import { spawn, ChildProcess } from 'child_process';
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, renameSync, cpSync } from 'fs';
 import path from 'path';
 import * as pty from 'node-pty';
@@ -19,7 +18,6 @@ app.use(express.json());
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
-const runningBuilds: Record<string, ChildProcess> = {};
 
 // Терминалы/агенты переживают разрыв WS: PTY держится живым по стабильному id,
 // вывод копится в буфере, при переподключении буфер переотдаётся. GC убивает отвязанные сессии.
@@ -47,39 +45,6 @@ function broadcast(data: object): void {
   wss.clients.forEach(c => c.readyState === WebSocket.OPEN && c.send(msg));
 }
 
-// Убиваем всю группу процессов (npm → node/vite и т.п.), а не только bash-обёртку
-function killBuild(proc: ChildProcess): void {
-  try {
-    if (proc.pid) process.kill(-proc.pid, 'SIGTERM');
-    else proc.kill();
-  } catch {
-    try { proc.kill(); } catch { /* ignore */ }
-  }
-}
-
-// Подбираем команду запуска из package.json открытого проекта и привязываем её к нужному порту.
-// Приоритет скриптов: start → dev → preview. Если скриптов нет — отдаём папку статикой.
-function buildRunCommand(projectPath: string, port: number): string {
-  const pkgPath = path.join(projectPath, 'package.json');
-  if (existsSync(pkgPath)) {
-    try {
-      const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
-      const scripts: Record<string, string> = pkg.scripts || {};
-      const name = ['start', 'dev', 'preview'].find(n => scripts[n]);
-      if (name) {
-        const hasDeps = pkg.dependencies || pkg.devDependencies;
-        const needInstall = hasDeps && !existsSync(path.join(projectPath, 'node_modules'));
-        const install = needInstall ? 'npm install && ' : '';
-        // Vite не читает PORT из env — порт/хост передаём флагами
-        const isVite = /vite/.test(scripts[name]);
-        if (isVite) return `${install}npm run ${name} -- --host 0.0.0.0 --port ${port}`;
-        return `${install}npm run ${name}`;
-      }
-    } catch { /* битый package.json — упадём в статику */ }
-  }
-  return `python3 -m http.server ${port} --bind 0.0.0.0`;
-}
-
 // Общий менеджер запускается с cwd = PROJECTS_DIR. Чтобы claude CLI подхватил навыки,
 // копируем их из репозитория (backend/skills) в PROJECTS_DIR/.claude/skills при старте.
 function syncManagerSkills(): void {
@@ -104,7 +69,6 @@ app.post('/api/projects/clone', async (req, res) => {
 app.delete('/api/projects/:id', (req, res) => {
   const p = getProject(req.params.id);
   if (!p) return res.status(404).json({ error: 'Not found' });
-  if (runningBuilds[p.id]) { killBuild(runningBuilds[p.id]); delete runningBuilds[p.id]; }
   try {
     deleteProject(p.id);
     broadcast({ type: 'projects_updated' });
@@ -184,33 +148,6 @@ app.post('/api/projects/:id/fs/rename', (req, res) => {
 
 app.post('/api/projects/:id/commit', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json({ ok: false }); await commitAll(p.path, req.body.message || 'chore: update'); res.json({ ok: true }); });
 app.post('/api/projects/:id/push', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json({ ok: false }); await pushRepo(p.path); res.json({ ok: true }); });
-
-app.post('/api/projects/:id/build/start', (req, res) => {
-  const p = getProject(req.params.id);
-  if (!p) return res.json({ ok: false });
-  const port: number = req.body.port || 8080;
-  if (runningBuilds[p.id]) killBuild(runningBuilds[p.id]);
-  const cmd = buildRunCommand(p.path, port);
-  // detached: true — процесс становится лидером группы, чтобы потом убить всё дерево
-  const proc = spawn('bash', ['-lc', cmd], {
-    cwd: p.path,
-    env: { ...process.env, PORT: String(port), HOST: '0.0.0.0' },
-    detached: true,
-  });
-  runningBuilds[p.id] = proc;
-  proc.stdout?.on('data', d => broadcast({ type: 'build_log', project: p.id, text: d.toString() }));
-  proc.stderr?.on('data', d => broadcast({ type: 'build_log', project: p.id, text: d.toString() }));
-  proc.on('exit', () => { broadcast({ type: 'build_status', project: p.id, running: false }); delete runningBuilds[p.id]; });
-  broadcast({ type: 'build_status', project: p.id, running: true, port });
-  res.json({ ok: true, port, cmd });
-});
-
-app.post('/api/projects/:id/build/stop', (req, res) => {
-  const p = getProject(req.params.id);
-  if (!p) return res.json({ ok: false });
-  if (runningBuilds[p.id]) { killBuild(runningBuilds[p.id]); delete runningBuilds[p.id]; }
-  res.json({ ok: true });
-});
 
 wss.on('connection', ws => {
   ws.on('message', async (raw: Buffer) => {

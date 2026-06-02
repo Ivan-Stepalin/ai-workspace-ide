@@ -4,7 +4,7 @@
 
 ## Что это
 
-**AI Workspace IDE** — браузерная IDE, которая управляет набором отдельных проектов. В каждом проекте: файловое дерево, Monaco-редактор, интегрированные PTY-терминалы, git, сессии агентов на базе `claude` CLI и запуск приложения проекта одной кнопкой. Есть кросс-проектный «общий менеджер».
+**AI Workspace IDE** — браузерная IDE, которая управляет набором отдельных проектов. В каждом проекте: файловое дерево, Monaco-редактор, интегрированные PTY-терминалы, git, сессии агентов на базе `claude` CLI. Есть кросс-проектный «общий менеджер».
 
 Монорепо из двух пакетов:
 
@@ -41,11 +41,11 @@ ai-workspace-ide/
 
 ## Backend (`backend/src/`)
 
-- `index.ts` — Express-роуты (`/api/projects/...`: список, создание, clone, delete, файлы, fs-операции, git log/branches/commit/push, build start/stop) + WebSocket-сервер (терминалы + агенты). Хелперы: `buildRunCommand()` (подбор команды запуска проекта из его `package.json`: `start`→`dev`→`preview`, Vite получает `--host/--port`, иначе статика через python), `killBuild()` (убивает всю группу процессов), `syncManagerSkills()`.
+- `index.ts` — Express-роуты (`/api/projects/...`: список, создание, clone, delete, файлы, fs-операции, git log/branches/commit/push) + WebSocket-сервер (терминалы + агенты). Хелпер: `syncManagerSkills()`.
 - `agents.ts` — только `PROMPTS`: ролевые системные промпты агентов. Сами агенты — это интерактивный `claude` в PTY (см. `terminal_create`), роль передаётся флагом `--append-system-prompt`. Отдельного chat-стриминга больше нет.
 - `projects.ts` — БД, `listProjects()` (+автообнаружение), `createProject`, `cloneRepo(url)`, `deleteProject(id)` (удаляет папку, потом запись), `getProject`. Экспортирует `PROJECTS_DIR`.
 - `git.ts` — обёртки simple-git + построение дерева файлов.
-- `telegram.ts` — опциональный Telegram-бот (long polling). Поднимается из `index.ts`, только если задан `TELEGRAM_BOT_TOKEN`. Те же роли (`PROMPTS`) и проекты, но агент запускается в **headless-режиме** (`claude -p --output-format stream-json --resume`), а не в PTY: чат привязывается к `{ projectId, agent, sessionId }` (таблица `tg_sessions` в `workspace.db`), контекст диалога держится через `--resume`. Команды: `/agent`, `/projects`, `/status`, `/reset`, `/cancel`.
+- `telegram.ts` — опциональный Telegram-бот (long polling). Поднимается из `index.ts`, только если задан `TELEGRAM_BOT_TOKEN`. Те же роли (`PROMPTS`) и проекты, но агент запускается в **headless-режиме** (`claude -p --output-format stream-json --resume`), а не в PTY: чат привязывается к `{ projectId, agent, sessionId }` (таблица `tg_sessions` в `workspace.db`), контекст диалога держится через `--resume`. Команды (в т.ч. в меню бота через `setMyCommands`): `/agent`, `/projects`, `/status`, `/reset`, `/cancel`, `/help`.
 - `types.ts` — `WsMessage` и доменные типы.
 
 ### WebSocket-протокол
@@ -54,7 +54,7 @@ ai-workspace-ide/
 
 - `terminal_create` — создать PTY: `{ type:'terminal_create', projectId, agent?, cols, rows }`. Если `agent` задан — в PTY запускается интерактивный `claude` с ролью (`--append-system-prompt`) вместо `bash`; для `overseer` cwd = `PROJECTS_DIR`, иначе папка проекта. Ответ `terminal_ready`.
 - `terminal_input` / `terminal_resize` → `terminal_data` / `terminal_exit` (по `terminalId`).
-- Бродкасты: `build_status`, `file_changed`, `tree_updated`, `projects_updated`.
+- Бродкасты: `file_changed`, `tree_updated`, `projects_updated`.
 
 ### Агенты и скиллы
 
@@ -83,7 +83,7 @@ ai-workspace-ide/
 
 ## Внешние требования
 
-- Node.js 20+, `claude` CLI в `PATH` (для агентов), `python3` (фолбэк-статика для проектов без скрипта запуска).
+- Node.js 20+, `claude` CLI в `PATH` (для агентов), `git`.
 
 ## Подводные камни
 

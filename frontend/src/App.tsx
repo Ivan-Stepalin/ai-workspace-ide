@@ -14,7 +14,6 @@ loader.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/
 type Project = { id: string; name: string; path: string; created_at: number }
 type GitCommit = { hash: string; message: string; date: string }
 type GitBranches = { all: string[]; current: string }
-type BuildInfo = { running: boolean; port?: number; project: string }
 // uid — уникальный id вкладки (стабильный ключ); ownerProject — проект-владелец (null = глобальная, напр. общий менеджер)
 // wsId — стабильный id PTY-сессии: по нему фронт переподключается к живому терминалу/агенту после reload/новой вкладки
 type Tab =
@@ -62,7 +61,6 @@ export default function App() {
   const [tree, setTree] = useState<FileNode[]>([])
   const [branches, setBranches] = useState<GitBranches>({ all: [], current: '' })
   const [log, setLog] = useState<GitCommit[]>([])
-  const [build, setBuild] = useState<Record<string, BuildInfo>>({})
   const [tabs, setTabs] = useState<Tab[]>(persisted.tabs)
   const [activeUid, setActiveUid] = useState<number | null>(persisted.activeUid)
   const [repoModalOpen, setRepoModalOpen] = useState(false)
@@ -135,7 +133,6 @@ export default function App() {
     socket.onmessage = (e: MessageEvent) => {
       const data = JSON.parse(e.data)
       if (data.type === 'projects_updated') axios.get<Project[]>(API + '/api/projects').then(r => setProjects(r.data))
-      if (data.type === 'build_status') setBuild(prev => ({ ...prev, [data.project]: data }))
       if (data.type === 'tree_updated' && data.projectId === activeRef.current?.id) setTree(data.tree)
       if (data.type === 'file_changed') {
         setTabs(prev => {
@@ -272,7 +269,6 @@ export default function App() {
     })
   }
 
-  const buildInfo = active ? build[active.id] : null
   // вкладки, видимые в баре текущего проекта (+ глобальные, напр. общий менеджер)
   const visibleTabs = tabs.filter(t => t.ownerProject === null || t.ownerProject === active?.id)
   const activeTab = tabs.find(t => t.uid === activeUid)
@@ -472,13 +468,7 @@ export default function App() {
             ))}
           </div>
 
-          <div className={sectionCls + ' border-y border-edge'}>СЕРВЕР</div>
-          <div className="flex items-center gap-2 px-3 py-2">
-            <span className={'inline-block h-2 w-2 rounded-full ' + (buildInfo?.running ? 'bg-mint' : 'bg-dim')} />
-            <span className={'text-xs ' + (buildInfo?.running ? 'text-mint' : 'text-dim')}>{buildInfo?.running ? ':' + buildInfo.port + ' запущен' : 'остановлен'}</span>
-          </div>
-
-          <div className={sectionCls + ' border-t border-edge'}>ГЛОБАЛЬНО</div>
+          <div className={sectionCls + ' border-y border-edge'}>ГЛОБАЛЬНО</div>
           <div className="flex flex-col gap-2 p-3">
             {actionBtn('🧭 Общий менеджер', openOverseer, agentColors.overseer)}
             {actionBtn('➕ Добавить репозиторий', () => setRepoModalOpen(true))}
@@ -488,11 +478,8 @@ export default function App() {
           <div className="flex flex-col gap-2 p-3">
             {AGENTS.map(a => actionBtn('🤖 ' + a.label, () => openAgent(a.type), agentColors[a.type]))}
             {actionBtn('⌨ Терминал', openTerminal)}
-            {buildInfo?.running && actionBtn('🌐 Открыть :' + buildInfo.port, () => window.open('http://' + BACKEND_HOST + ':' + buildInfo!.port, '_blank'), '#4ec9b0')}
             {actionBtn('Коммит', () => { if (!active) return; const proj = active; setPromptCfg({ title: 'Коммит', label: 'Сообщение коммита', placeholder: 'chore: update', confirmLabel: 'Закоммитить', onSubmit: m => axios.post(API + '/api/projects/' + proj.id + '/commit', { message: m }).then(() => { switchProject(proj); refreshTree() }) }) })}
             {actionBtn('Push', () => active && axios.post(API + '/api/projects/' + active.id + '/push'))}
-            {actionBtn('Старт :8080', () => active && axios.post(API + '/api/projects/' + active.id + '/build/start', { port: 8080 }))}
-            {actionBtn('Стоп', () => active && axios.post(API + '/api/projects/' + active.id + '/build/stop'))}
           </div>
 
           <div className="mt-auto flex items-center bg-accent px-3 py-[3px]">

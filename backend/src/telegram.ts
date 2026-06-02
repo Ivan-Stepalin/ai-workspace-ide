@@ -164,6 +164,16 @@ export function initTelegramBot(): void {
   }
   bot = new TelegramBot(token, { polling: true });
 
+  // Меню бота (кнопка ☰ рядом с полем ввода + подсказки при наборе «/»).
+  bot.setMyCommands([
+    { command: 'agent', description: 'Выбрать роль агента' },
+    { command: 'projects', description: 'Выбрать проект' },
+    { command: 'status', description: 'Текущая привязка' },
+    { command: 'reset', description: 'Сбросить контекст диалога' },
+    { command: 'cancel', description: 'Прервать текущий ответ' },
+    { command: 'help', description: 'Справка' },
+  ]).catch(() => { /* ignore */ });
+
   bot.onText(/^\/(start|help)/, msg => {
     if (!guard(msg.chat.id)) return;
     bot!.sendMessage(msg.chat.id,
