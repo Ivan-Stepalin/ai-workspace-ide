@@ -9,7 +9,7 @@ import path from 'path';
 import * as pty from 'node-pty';
 import { chat, clearSession } from './agents.js';
 import { getLog, getBranches, commitAll, pushRepo, getFiles, getFileTree } from './git.js';
-import { listProjects, createProject, getProject, cloneRepo, PROJECTS_DIR } from './projects.js';
+import { listProjects, createProject, getProject, cloneRepo, deleteProject, PROJECTS_DIR } from './projects.js';
 import { WsMessage } from './types.js';
 
 const app = express();
@@ -98,6 +98,16 @@ app.post('/api/projects/clone', async (req, res) => {
     const proj = await cloneRepo(req.body.url, req.body.name);
     broadcast({ type: 'projects_updated' });
     res.json(proj);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+app.delete('/api/projects/:id', (req, res) => {
+  const p = getProject(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Not found' });
+  if (runningBuilds[p.id]) { killBuild(runningBuilds[p.id]); delete runningBuilds[p.id]; }
+  try {
+    deleteProject(p.id);
+    broadcast({ type: 'projects_updated' });
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 app.get('/api/projects/:id/log', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json([]); res.json(await getLog(p.path)); });

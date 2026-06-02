@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { mkdirSync, existsSync, readdirSync } from 'fs';
+import { mkdirSync, existsSync, readdirSync, rmSync } from 'fs';
 import { simpleGit } from 'simple-git';
 import path from 'path';
 import { Project } from './types.js';
@@ -69,4 +69,12 @@ export async function createProject(name: string): Promise<Project> {
 
 export function getProject(id: string): Project | undefined {
   return db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Project | undefined;
+}
+
+// Удаление проекта: сначала папка (чтобы автообнаружение не вернуло её), затем запись в БД.
+export function deleteProject(id: string): void {
+  const proj = getProject(id);
+  if (!proj) return;
+  if (existsSync(proj.path)) rmSync(proj.path, { recursive: true, force: true });
+  db.prepare('DELETE FROM projects WHERE id = ?').run(id);
 }

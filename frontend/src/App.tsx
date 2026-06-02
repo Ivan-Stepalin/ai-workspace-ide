@@ -5,6 +5,7 @@ import FileTree, { FileNode } from './FileTree'
 import TerminalPanel from './Terminal'
 import AgentSession from './AgentSession'
 import AddRepoModal from './AddRepoModal'
+import ConfirmModal from './ConfirmModal'
 import { agentColors, AGENTS, agentLabel, OVERSEER, Message } from './theme'
 import { API, WS_URL, BACKEND_HOST } from './config'
 
@@ -53,6 +54,8 @@ export default function App() {
   const [tabs, setTabs] = useState<Tab[]>([])
   const [activeTab, setActiveTab] = useState(0)
   const [repoModalOpen, setRepoModalOpen] = useState(false)
+  const [confirmDeleteProj, setConfirmDeleteProj] = useState<Project | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const ws = useRef<WebSocket | null>(null)
   const activeRef = useRef<Project | null>(null)
   const saveRef = useRef<(i: number) => void>(() => {})
@@ -169,6 +172,29 @@ export default function App() {
     switchProject(proj)
   }
 
+  function deleteProjectConfirmed(proj: Project) {
+    setDeleting(true)
+    axios.delete(API + '/api/projects/' + proj.id)
+      .then(() => {
+        setDeleting(false)
+        setConfirmDeleteProj(null)
+        const remaining = projects.filter(p => p.id !== proj.id)
+        setProjects(remaining)
+        if (active?.id === proj.id) {
+          if (remaining.length > 0) switchProject(remaining[0])
+          else {
+            // проектов не осталось — закрываем сессии проекта, общий менеджер оставляем
+            const keep = tabs.filter(t => t.type === 'agent' && t.agentType === OVERSEER)
+            tabs.forEach(t => { if (t.type === 'agent' && t.agentType !== OVERSEER) closeAgentSession(t.sessionId) })
+            setActive(null); activeRef.current = null
+            setTabs(keep); setActiveTab(0)
+            setTree([]); setBranches({ all: [], current: '' }); setLog([])
+          }
+        }
+      })
+      .catch(e => { setDeleting(false); alert('Не удалось удалить проект: ' + (e?.response?.data?.error || e)) })
+  }
+
   function saveFile(tabIndex: number) {
     const tab = tabs[tabIndex]
     if (!active || tab.type !== 'file') return
@@ -224,14 +250,21 @@ export default function App() {
       <div className="flex h-[35px] flex-shrink-0 items-center gap-0.5 border-b border-edge bg-topbar px-2">
         <span className="mr-1.5 text-[11px] text-muted">ПРОЕКТЫ</span>
         {projects.map(p => (
-          <button
+          <div
             key={p.id}
             onClick={() => switchProject(p)}
             className={
-              'rounded-md px-3 py-[3px] text-xs transition-colors ' +
+              'flex cursor-pointer items-center gap-1 rounded-md py-[3px] pl-3 pr-1.5 text-xs transition-colors ' +
               (active?.id === p.id ? 'bg-accentbg text-white ring-1 ring-accent' : 'text-muted hover:bg-white/5')
             }
-          >{p.name}</button>
+          >
+            <span>{p.name}</span>
+            <span
+              onClick={e => { e.stopPropagation(); setConfirmDeleteProj(p) }}
+              title="Удалить проект"
+              className="rounded px-1 text-sm leading-none opacity-60 transition hover:bg-white/15 hover:opacity-100"
+            >×</span>
+          </div>
         ))}
         <button onClick={addProject} className="px-1.5 text-lg text-muted transition-colors hover:text-fg">+</button>
         <span className="ml-auto font-mono text-[11px] text-dim">{BACKEND_HOST}</span>
@@ -399,6 +432,16 @@ export default function App() {
       </div>
 
       <AddRepoModal open={repoModalOpen} onClose={() => setRepoModalOpen(false)} onAdded={onRepoAdded} />
+      <ConfirmModal
+        open={!!confirmDeleteProj}
+        title="Удалить проект"
+        message={confirmDeleteProj ? `Удалить проект «${confirmDeleteProj.name}»?\n\nПапка ${confirmDeleteProj.path} будет удалена безвозвратно.` : ''}
+        confirmLabel="Удалить"
+        danger
+        loading={deleting}
+        onConfirm={() => confirmDeleteProj && deleteProjectConfirmed(confirmDeleteProj)}
+        onClose={() => { if (!deleting) setConfirmDeleteProj(null) }}
+      />
     </div>
   )
 }
