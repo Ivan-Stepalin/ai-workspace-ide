@@ -41,37 +41,37 @@ ai-workspace-ide/
 
 ## Backend (`backend/src/`)
 
-- `index.ts` — Express-роуты (`/api/projects/...`: список, создание, clone, delete, файлы, fs-операции, git log/branches/commit/push, build start/stop) + WebSocket-сервер. Хелперы: `buildRunCommand()` (подбор команды запуска проекта из его `package.json`: `start`→`dev`→`preview`, Vite получает `--host/--port`, иначе статика через python), `killBuild()` (убивает всю группу процессов), `syncManagerSkills()`, `buildOverseerContext()`.
-- `agents.ts` — `chat()`: на **каждое сообщение** спавнит `claude --print --dangerously-skip-permissions <prompt>`, стримит stdout чанками. История в памяти `hist` **по `sessionId`**. `PROMPTS` по типам агентов; `clearSession(id)`.
+- `index.ts` — Express-роуты (`/api/projects/...`: список, создание, clone, delete, файлы, fs-операции, git log/branches/commit/push, build start/stop) + WebSocket-сервер (терминалы + агенты). Хелперы: `buildRunCommand()` (подбор команды запуска проекта из его `package.json`: `start`→`dev`→`preview`, Vite получает `--host/--port`, иначе статика через python), `killBuild()` (убивает всю группу процессов), `syncManagerSkills()`.
+- `agents.ts` — только `PROMPTS`: ролевые системные промпты агентов. Сами агенты — это интерактивный `claude` в PTY (см. `terminal_create`), роль передаётся флагом `--append-system-prompt`. Отдельного chat-стриминга больше нет.
 - `projects.ts` — БД, `listProjects()` (+автообнаружение), `createProject`, `cloneRepo(url)`, `deleteProject(id)` (удаляет папку, потом запись), `getProject`. Экспортирует `PROJECTS_DIR`.
 - `git.ts` — обёртки simple-git + построение дерева файлов.
 - `types.ts` — `WsMessage` и доменные типы.
 
 ### WebSocket-протокол
 
-Главное соединение приложения (одно, в `App.tsx`) ведёт чат со всеми агентами; **каждый терминал открывает своё** соединение.
+Каждый терминал (и каждый агент — это тоже терминал) открывает **своё** WebSocket-соединение. Главное соединение `App.tsx` принимает только бродкасты.
 
-- Чат: клиент шлёт `{ type:'chat', sessionId, agent, message, projectId }`; сервер отвечает `chunk_start` → много `chunk` → `chunk_end`, плюс `agent_status`. **Всё маршрутизируется по `sessionId`.**
-- `{ type:'agent_close', sessionId }` — завершить сессию (убить процесс, очистить историю). При разрыве соединения сервер гасит все процессы агентов этого соединения.
-- Терминалы: `terminal_create` / `terminal_input` / `terminal_resize` ↔ `terminal_ready` / `terminal_data` / `terminal_exit` (по `terminalId`).
+- `terminal_create` — создать PTY: `{ type:'terminal_create', projectId, agent?, cols, rows }`. Если `agent` задан — в PTY запускается интерактивный `claude` с ролью (`--append-system-prompt`) вместо `bash`; для `overseer` cwd = `PROJECTS_DIR`, иначе папка проекта. Ответ `terminal_ready`.
+- `terminal_input` / `terminal_resize` → `terminal_data` / `terminal_exit` (по `terminalId`).
 - Бродкасты: `build_status`, `file_changed`, `tree_updated`, `projects_updated`.
 
 ### Агенты и скиллы
 
-Типы: `manager` / `coder` / `reviewer` — работают **в папке конкретного проекта**. `overseer` («Общий менеджер») — **кросс-проектный**: cwd = `PROJECTS_DIR`, в промпт подкладывается сводка по всем проектам (`buildOverseerContext`), сам код не правит, рекомендует открыть нужного агента, умеет клонировать репозитории.
+Агент = **интерактивный `claude` в PTY-терминале** (виден весь нативный процесс Claude Code: размышления, вызовы инструментов). Типы: `manager` / `coder` / `reviewer` — cwd = папка проекта; `overseer` («Общий менеджер») — cwd = `PROJECTS_DIR`, видит все проекты, сам код не правит, рекомендует открыть нужного агента, умеет клонировать репозитории. Роль задаётся ролевым системным промптом из `PROMPTS` (`agents.ts`).
 
-Навыки лежат в `backend/skills/<name>/SKILL.md` (формат `.claude/skills`). При старте бэкенда `syncManagerSkills()` копирует их в `PROJECTS_DIR/.claude/skills/`, откуда их подхватывает `claude` CLI у overseer. Новый навык = новая папка в `backend/skills/` + перезапуск бэкенда.
+Навыки лежат в `backend/skills/<name>/SKILL.md` (формат `.claude/skills`). При старте бэкенда `syncManagerSkills()` копирует их в `PROJECTS_DIR/.claude/skills/`, откуда их подхватывает `claude` у overseer (его cwd = `PROJECTS_DIR`). Новый навык = новая папка в `backend/skills/` + перезапуск бэкенда.
 
 ## Frontend (`frontend/src/`)
 
-- `App.tsx` — оркестратор: всё состояние, единый WebSocket, роуты к API, раскладка (3 колонки: проводник | вкладки+контент | git/сервер/действия).
-- `AgentSession.tsx` — UI одной сессии агента (чат). `AddRepoModal.tsx` — добавление репозитория по URL с лоадером. `ConfirmModal.tsx` — переиспользуемое подтверждение (используется для удаления проекта). `FileTree.tsx` — дерево файлов с контекстным меню. `Terminal.tsx` — xterm + FitAddon, своё WS-соединение.
-- `theme.ts` — `agentColors` (цвета подтипов, применяются **инлайном** динамически), `AGENTS`, `agentLabel`, `OVERSEER`, тип `Message`.
+- `App.tsx` — оркестратор: всё состояние, главный WebSocket (бродкасты), роуты к API, раскладка (3 колонки: проводник | вкладки+контент | git/сервер/действия).
+- `Terminal.tsx` — xterm + FitAddon, своё WS-соединение; проп `agent` → запускает claude нужной роли. Используется и для обычных терминалов, и для агентов.
+- `AddRepoModal.tsx` — добавление репозитория по URL (лоадер, авто-имя из ссылки, вставка из буфера). `ConfirmModal.tsx` — переиспользуемое подтверждение (удаление проекта). `FileTree.tsx` — дерево файлов с контекстным меню.
+- `theme.ts` — `agentColors` (цвета подтипов, инлайном), `AGENTS`, `agentLabel`, `OVERSEER`.
 - `config.ts` — `API` / `WS_URL` / `BACKEND_HOST`.
 
-### Модель вкладок и сессий
+### Модель вкладок
 
-`tabs: Tab[]`, где `Tab = agent | file | terminal`. Состояние сессий (`messages`, `streaming`, `agentStatus`, `inputs`) индексируется **по `sessionId`** (число, уникальное в рамках сессии приложения). Вкладка `overseer` единственная и **переживает смену проекта** (остальные вкладки проекта при `switchProject` закрываются). Закрытие вкладки агента шлёт `agent_close`.
+`tabs: Tab[]`, где `Tab = agent | file | terminal`, у каждой `uid` (стабильный ключ) и `ownerProject` (проект-владелец; `null` = глобальная, напр. общий менеджер). **Все вкладки смонтированы постоянно** — фон не выгружается, поэтому агенты/терминалы продолжают работать при переключении проектов; видна только активная (`activeUid`). Бар показывает вкладки текущего проекта + глобальные. `switchProject` НЕ закрывает вкладки/сессии — лишь меняет активную (запоминается per-project в `lastActiveByProject`). Агент-вкладки — это `TerminalPanel` с пропом `agent`; закрытие вкладки размонтирует панель → её WS закрывается → бэкенд гасит PTY.
 
 ### Стили — Tailwind CSS v4
 
@@ -88,4 +88,4 @@ ai-workspace-ide/
 
 - xterm нельзя `fit()` пока его вкладка скрыта (`display:none`, ширина 0) — иначе раскладка ломается; fit вызывается только при ненулевом размере контейнера.
 - Колбэки, передаваемые в долгоживущие эффекты (терминал), держи в `ref`, а не в зависимостях эффекта — иначе пересоздаётся xterm.
-- `claude --print` рассматривай как одноразовый процесс на сообщение; контекст между сообщениями держится только через `hist[sessionId]`.
+- Вкладки рендерятся все сразу (скрытые — `display:none`), чтобы фоновые агенты/терминалы не выгружались. Не размонтируй их при переключении проекта.

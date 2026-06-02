@@ -7,7 +7,7 @@ import { spawn, ChildProcess } from 'child_process';
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, renameSync, cpSync } from 'fs';
 import path from 'path';
 import * as pty from 'node-pty';
-import { chat, clearSession } from './agents.js';
+import { PROMPTS } from './agents.js';
 import { getLog, getBranches, commitAll, pushRepo, getFiles, getFileTree } from './git.js';
 import { listProjects, createProject, getProject, cloneRepo, deleteProject, PROJECTS_DIR } from './projects.js';
 import { WsMessage } from './types.js';
@@ -70,25 +70,6 @@ function syncManagerSkills(): void {
     mkdirSync(dest, { recursive: true });
     cpSync(src, dest, { recursive: true });
   } catch (e) { console.error('skill sync failed:', e); }
-}
-
-// Сводка по всем проектам для общего менеджера: верхний уровень файлов, последние коммиты, выжимка README.
-async function buildOverseerContext(): Promise<string> {
-  const projects = listProjects();
-  if (!projects.length) return 'Сейчас в рабочем пространстве нет ни одного проекта.';
-  const parts: string[] = [];
-  for (const p of projects) {
-    let readme = '';
-    for (const f of ['README.md', 'readme.md', 'README']) {
-      const rp = path.join(p.path, f);
-      if (existsSync(rp)) { readme = readFileSync(rp, 'utf-8').slice(0, 300).replace(/\s+/g, ' '); break; }
-    }
-    let commits = '';
-    try { commits = (await getLog(p.path)).slice(0, 3).map(c => c.hash + ' ' + c.message).join('; '); } catch { /* нет git */ }
-    const tree = getFileTree(p.path).slice(0, 12).map(n => n.name).join(', ');
-    parts.push(`### ${p.name} (id: ${p.id})\nВерхний уровень: ${tree || '—'}\nПоследние коммиты: ${commits || '—'}\nREADME: ${readme || '—'}`);
-  }
-  return 'КОНТЕКСТ — текущие проекты в рабочем пространстве:\n\n' + parts.join('\n\n');
 }
 
 app.get('/api/projects', (_req, res) => res.json(listProjects()));
@@ -213,23 +194,40 @@ app.post('/api/projects/:id/build/stop', (req, res) => {
 
 wss.on('connection', ws => {
   let terminalId: string | null = null;
-  // Запущенные процессы агентов этого соединения, по sessionId — чтобы убивать при закрытии сессии/соединения.
-  const agentProcs = new Map<string, ChildProcess>();
 
   ws.on('message', async (raw: Buffer) => {
     try {
       const msg = JSON.parse(raw.toString()) as WsMessage;
 
-      if (msg.type === 'terminal_create' && msg.projectId) {
-        const p = getProject(msg.projectId);
-        if (!p) return;
-        const id = msg.projectId + '_' + Date.now() + '_' + (++terminalSeq);
+      // Создание терминала. Если задан agent — в PTY запускается интерактивный claude
+      // с ролевым системным промптом (виден весь процесс; скиллы берутся из cwd/.claude/skills),
+      // иначе обычный bash. Общий менеджер (overseer) работает в корне всех проектов.
+      if (msg.type === 'terminal_create') {
+        const agent = msg.agent;
+        let cwd: string;
+        if (agent === 'overseer') {
+          cwd = PROJECTS_DIR;
+        } else {
+          const p = msg.projectId ? getProject(msg.projectId) : undefined;
+          if (!p) return;
+          cwd = p.path;
+        }
+        const id = (msg.projectId || agent || 'term') + '_' + Date.now() + '_' + (++terminalSeq);
         terminalId = id;
-        const term = pty.spawn('bash', [], {
+
+        let cmd = 'bash';
+        let args: string[] = [];
+        if (agent) {
+          const sys = (PROMPTS[agent] || PROMPTS.manager).replace(/{p}/g, cwd);
+          cmd = 'claude';
+          args = ['--append-system-prompt', sys, '--dangerously-skip-permissions'];
+        }
+
+        const term = pty.spawn(cmd, args, {
           name: 'xterm-256color',
           cols: msg.cols || 120,
           rows: msg.rows || 30,
-          cwd: p.path,
+          cwd,
           env: { ...process.env, TERM: 'xterm-256color' } as Record<string, string>,
         });
         terminals[id] = term;
@@ -239,6 +237,8 @@ wss.on('connection', ws => {
         term.onExit(() => {
           if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'terminal_exit', terminalId: id }));
           delete terminals[id];
+          // агент мог склонировать репозиторий / изменить файлы — обновим список проектов
+          if (agent) broadcast({ type: 'projects_updated' });
         });
         ws.send(JSON.stringify({ type: 'terminal_ready', terminalId: id }));
         return;
@@ -260,58 +260,6 @@ wss.on('connection', ws => {
         if (p) broadcast({ type: 'tree_updated', projectId: msg.projectId, tree: getFileTree(p.path) });
         return;
       }
-
-      // Закрытие сессии агента: убиваем процесс и чистим историю
-      if (msg.type === 'agent_close' && msg.sessionId !== undefined) {
-        const sid = String(msg.sessionId);
-        const proc = agentProcs.get(sid);
-        if (proc) { proc.kill(); agentProcs.delete(sid); }
-        clearSession(sid);
-        return;
-      }
-
-      const { type, agent, message, projectId, sessionId } = msg;
-      if (type !== 'chat' || !agent || !message || sessionId === undefined) return;
-      const sid = String(sessionId);
-
-      // Общий менеджер: работает не в одном проекте, а в корне всех проектов,
-      // получает сводку по всем проектам и умеет клонировать репозитории (навык add-repository).
-      if (agent === 'overseer') {
-        const context = await buildOverseerContext();
-        ws.send(JSON.stringify({ type: 'chunk_start', agent, sessionId }));
-        await chat(
-          sid, agent, message, PROJECTS_DIR,
-          text => ws.send(JSON.stringify({ type: 'chunk', agent, text, sessionId })),
-          status => ws.send(JSON.stringify({ type: 'agent_status', agent, status, sessionId })),
-          () => { /* изменения в корне проектов не транслируем как дерево */ },
-          proc => agentProcs.set(sid, proc),
-          context
-        );
-        agentProcs.delete(sid);
-        ws.send(JSON.stringify({ type: 'chunk_end', agent, sessionId }));
-        // менеджер мог склонировать репозиторий — обновим список проектов у клиентов
-        broadcast({ type: 'projects_updated' });
-        return;
-      }
-
-      if (!projectId) return;
-      const p = getProject(projectId);
-      if (!p) return;
-
-      ws.send(JSON.stringify({ type: 'chunk_start', agent, sessionId }));
-      await chat(
-        sid, agent, message, p.path,
-        text => ws.send(JSON.stringify({ type: 'chunk', agent, text, sessionId })),
-        status => ws.send(JSON.stringify({ type: 'agent_status', agent, status, sessionId })),
-        filename => {
-          broadcast({ type: 'file_changed', filename, projectId });
-          broadcast({ type: 'tree_updated', projectId, tree: getFileTree(p.path) });
-        },
-        proc => agentProcs.set(sid, proc)
-      );
-      agentProcs.delete(sid);
-      ws.send(JSON.stringify({ type: 'chunk_end', agent, sessionId }));
-
     } catch (e) {
       ws.send(JSON.stringify({ type: 'error', text: String(e) }));
     }
@@ -322,9 +270,6 @@ wss.on('connection', ws => {
       terminals[terminalId].kill();
       delete terminals[terminalId];
     }
-    // Разрыв соединения (закрытие вкладки браузера) — гасим все сессии агентов этого соединения
-    agentProcs.forEach((proc, sid) => { proc.kill(); clearSession(sid); });
-    agentProcs.clear();
   });
 });
 

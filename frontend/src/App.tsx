@@ -3,10 +3,9 @@ import axios from 'axios'
 import Editor, { loader } from '@monaco-editor/react'
 import FileTree, { FileNode } from './FileTree'
 import TerminalPanel from './Terminal'
-import AgentSession from './AgentSession'
 import AddRepoModal from './AddRepoModal'
 import ConfirmModal from './ConfirmModal'
-import { agentColors, AGENTS, agentLabel, OVERSEER, Message } from './theme'
+import { agentColors, AGENTS, agentLabel, OVERSEER } from './theme'
 import { API, WS_URL, BACKEND_HOST } from './config'
 
 loader.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs' } })
@@ -15,10 +14,11 @@ type Project = { id: string; name: string; path: string; created_at: number }
 type GitCommit = { hash: string; message: string; date: string }
 type GitBranches = { all: string[]; current: string }
 type BuildInfo = { running: boolean; port?: number; project: string }
+// uid — уникальный id вкладки (стабильный ключ); ownerProject — проект-владелец (null = глобальная, напр. общий менеджер)
 type Tab =
-  | { type: 'agent'; sessionId: number; agentType: string; num: number }
-  | { type: 'file'; name: string; filePath: string; content: string; dirty: boolean }
-  | { type: 'terminal'; projectId: string; termId: number }
+  | { uid: number; ownerProject: string | null; type: 'agent'; sessionId: number; agentType: string; num: number }
+  | { uid: number; ownerProject: string | null; type: 'file'; name: string; filePath: string; content: string; dirty: boolean }
+  | { uid: number; ownerProject: string | null; type: 'terminal'; projectId: string; termId: number }
 
 function getLang(filename: string): string {
   const ext = filename.split('.').pop() || ''
@@ -42,26 +42,23 @@ const sectionCls = 'px-3 pt-2 pb-1 text-[11px] font-semibold tracking-[0.08em] t
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([])
   const [active, setActive] = useState<Project | null>(null)
-  // всё, что относится к сессиям агентов, индексируется по sessionId
-  const [messages, setMessages] = useState<Record<string, Message[]>>({})
-  const [agentStatus, setAgentStatus] = useState<Record<string, string>>({})
-  const [streaming, setStreaming] = useState<Record<string, boolean>>({})
-  const [inputs, setInputs] = useState<Record<string, string>>({})
   const [tree, setTree] = useState<FileNode[]>([])
   const [branches, setBranches] = useState<GitBranches>({ all: [], current: '' })
   const [log, setLog] = useState<GitCommit[]>([])
   const [build, setBuild] = useState<Record<string, BuildInfo>>({})
   const [tabs, setTabs] = useState<Tab[]>([])
-  const [activeTab, setActiveTab] = useState(0)
+  const [activeUid, setActiveUid] = useState<number | null>(null)
   const [repoModalOpen, setRepoModalOpen] = useState(false)
   const [confirmDeleteProj, setConfirmDeleteProj] = useState<Project | null>(null)
   const [deleting, setDeleting] = useState(false)
   const ws = useRef<WebSocket | null>(null)
   const activeRef = useRef<Project | null>(null)
-  const saveRef = useRef<(i: number) => void>(() => {})
-  const termCounter = useRef(0)
+  const saveRef = useRef<(uid: number) => void>(() => {})
+  const uidCounter = useRef(0)
   const sessionCounter = useRef(0)
-  const agentNums = useRef<Record<string, number>>({})
+  const agentNums = useRef<Record<string, number>>({})       // `${projectId}:${agentType}` -> номер
+  const termCounters = useRef<Record<string, number>>({})    // projectId -> номер терминала
+  const lastActiveByProject = useRef<Record<string, number>>({}) // projectId -> uid последней активной вкладки
 
   const refreshTree = useCallback((projId?: string) => {
     const id = projId || activeRef.current?.id
@@ -78,56 +75,43 @@ export default function App() {
     ws.current = socket
     socket.onmessage = (e: MessageEvent) => {
       const data = JSON.parse(e.data)
-      if (data.type === 'agent_status') {
-        const sid = String(data.sessionId)
-        setAgentStatus(prev => ({ ...prev, [sid]: data.status }))
-        if (data.status === 'done' || data.status === 'error')
-          setTimeout(() => setAgentStatus(prev => { const n = { ...prev }; delete n[sid]; return n }), 2000)
-      }
-      if (data.type === 'chunk_start') setStreaming(prev => ({ ...prev, [String(data.sessionId)]: true }))
-      if (data.type === 'chunk') {
-        setMessages(prev => {
-          const k = String(data.sessionId)
-          const msgs = prev[k] || []
-          const last = msgs[msgs.length - 1]
-          if (last?.streaming) return { ...prev, [k]: [...msgs.slice(0, -1), { ...last, text: last.text + data.text }] }
-          return { ...prev, [k]: [...msgs, { role: 'agent' as const, agent: data.agent, text: data.text, streaming: true }] }
-        })
-      }
-      if (data.type === 'chunk_end') {
-        const k = String(data.sessionId)
-        setStreaming(prev => ({ ...prev, [k]: false }))
-        setMessages(prev => ({ ...prev, [k]: (prev[k] || []).map(m => ({ ...m, streaming: false })) }))
-      }
       if (data.type === 'projects_updated') axios.get<Project[]>(API + '/api/projects').then(r => setProjects(r.data))
       if (data.type === 'build_status') setBuild(prev => ({ ...prev, [data.project]: data }))
       if (data.type === 'tree_updated' && data.projectId === activeRef.current?.id) setTree(data.tree)
       if (data.type === 'file_changed') {
-        setTabs(prev => prev.map(tab => {
-          if (tab.type !== 'file' || tab.filePath !== data.filename) return tab
-          axios.get<{ content: string }>(API + '/api/projects/' + data.projectId + '/file/' + encodeURIComponent(data.filename))
-            .then(r => setTabs(tabs => tabs.map(t => t.type === 'file' && t.filePath === data.filename ? { ...t, content: r.data.content, dirty: false } : t)))
-          return tab
-        }))
+        setTabs(prev => {
+          const target = prev.find(t => t.type === 'file' && t.filePath === data.filename && t.ownerProject === data.projectId)
+          if (target) {
+            axios.get<{ content: string }>(API + '/api/projects/' + data.projectId + '/file/' + encodeURIComponent(data.filename))
+              .then(r => setTabs(ts => ts.map(t => t.uid === target.uid && t.type === 'file' ? { ...t, content: r.data.content, dirty: false } : t)))
+          }
+          return prev
+        })
       }
     }
   }, [])
 
-  function closeAgentSession(sessionId: number) {
-    ws.current?.send(JSON.stringify({ type: 'agent_close', sessionId }))
+  // активировать вкладку (и запомнить как последнюю активную для её проекта)
+  function activate(tab: Tab) {
+    setActiveUid(tab.uid)
+    if (tab.ownerProject) lastActiveByProject.current[tab.ownerProject] = tab.uid
   }
 
+  function pushTab(tab: Tab) {
+    setTabs(prev => [...prev, tab])
+    setActiveUid(tab.uid)
+    if (tab.ownerProject) lastActiveByProject.current[tab.ownerProject] = tab.uid
+  }
+
+  // Смена проекта НЕ закрывает вкладки/сессии — они остаются работать в фоне.
+  // Просто восстанавливаем видимую активную вкладку выбранного проекта.
   function switchProject(proj: Project) {
-    // Общий менеджер кросс-проектный — его вкладки сохраняем при смене проекта;
-    // сессии конкретного проекта (и файлы/терминалы) закрываем.
-    const keep = tabs.filter(t => t.type === 'agent' && t.agentType === OVERSEER)
-    tabs.forEach(t => { if (t.type === 'agent' && t.agentType !== OVERSEER) closeAgentSession(t.sessionId) })
     setActive(proj)
     activeRef.current = proj
-    setTabs(keep)
-    setActiveTab(0)
-    termCounter.current = 0
-    agentNums.current = {}
+    const remembered = lastActiveByProject.current[proj.id]
+    const hasRemembered = tabs.some(t => t.uid === remembered && t.ownerProject === proj.id)
+    const firstOfProj = tabs.find(t => t.ownerProject === proj.id)
+    setActiveUid(hasRemembered ? remembered : (firstOfProj ? firstOfProj.uid : null))
     axios.get<FileNode[]>(API + '/api/projects/' + proj.id + '/tree').then(r => setTree(r.data))
     axios.get<GitBranches>(API + '/api/projects/' + proj.id + '/branches').then(r => setBranches(r.data))
     axios.get<GitCommit[]>(API + '/api/projects/' + proj.id + '/log').then(r => setLog(r.data))
@@ -135,35 +119,30 @@ export default function App() {
 
   function openFile(filePath: string, name: string) {
     if (!active) return
-    const existing = tabs.findIndex(t => t.type === 'file' && t.filePath === filePath)
-    if (existing >= 0) { setActiveTab(existing); return }
+    const existing = tabs.find(t => t.type === 'file' && t.filePath === filePath && t.ownerProject === active.id)
+    if (existing) { activate(existing); return }
     axios.get<{ content: string }>(API + '/api/projects/' + active.id + '/file/' + encodeURIComponent(filePath))
-      .then(r => {
-        const newTab: Tab = { type: 'file', name, filePath, content: r.data.content, dirty: false }
-        setTabs(prev => { const next = [...prev, newTab]; setActiveTab(next.length - 1); return next })
-      })
+      .then(r => pushTab({ type: 'file', name, filePath, content: r.data.content, dirty: false, uid: ++uidCounter.current, ownerProject: active.id }))
   }
 
   function openTerminal() {
     if (!active) return
-    const newTab: Tab = { type: 'terminal', projectId: active.id, termId: ++termCounter.current }
-    setTabs(prev => { const next = [...prev, newTab]; setActiveTab(next.length - 1); return next })
+    const num = termCounters.current[active.id] = (termCounters.current[active.id] || 0) + 1
+    pushTab({ type: 'terminal', projectId: active.id, termId: num, uid: ++uidCounter.current, ownerProject: active.id })
   }
 
   function openAgent(agentType: string) {
     if (!active) return
-    const sessionId = ++sessionCounter.current
-    const num = agentNums.current[agentType] = (agentNums.current[agentType] || 0) + 1
-    const newTab: Tab = { type: 'agent', sessionId, agentType, num }
-    setTabs(prev => { const next = [...prev, newTab]; setActiveTab(next.length - 1); return next })
+    const key = active.id + ':' + agentType
+    const num = agentNums.current[key] = (agentNums.current[key] || 0) + 1
+    pushTab({ type: 'agent', sessionId: ++sessionCounter.current, agentType, num, uid: ++uidCounter.current, ownerProject: active.id })
   }
 
-  // Общий менеджер — единственный, кросс-проектный, не требует активного проекта
+  // Общий менеджер — единственный, кросс-проектный (ownerProject = null)
   function openOverseer() {
-    const existing = tabs.findIndex(t => t.type === 'agent' && t.agentType === OVERSEER)
-    if (existing >= 0) { setActiveTab(existing); return }
-    const newTab: Tab = { type: 'agent', sessionId: ++sessionCounter.current, agentType: OVERSEER, num: 1 }
-    setTabs(prev => { const next = [...prev, newTab]; setActiveTab(next.length - 1); return next })
+    const existing = tabs.find(t => t.type === 'agent' && t.agentType === OVERSEER)
+    if (existing) { setActiveUid(existing.uid); return }
+    pushTab({ type: 'agent', sessionId: ++sessionCounter.current, agentType: OVERSEER, num: 1, uid: ++uidCounter.current, ownerProject: null })
   }
 
   function onRepoAdded(proj: Project) {
@@ -178,40 +157,36 @@ export default function App() {
       .then(() => {
         setDeleting(false)
         setConfirmDeleteProj(null)
+        // убираем вкладки удаляемого проекта (их терминалы/агенты гаснут при размонтировании)
+        setTabs(prev => prev.filter(t => t.ownerProject !== proj.id))
         const remaining = projects.filter(p => p.id !== proj.id)
         setProjects(remaining)
         if (active?.id === proj.id) {
           if (remaining.length > 0) switchProject(remaining[0])
-          else {
-            // проектов не осталось — закрываем сессии проекта, общий менеджер оставляем
-            const keep = tabs.filter(t => t.type === 'agent' && t.agentType === OVERSEER)
-            tabs.forEach(t => { if (t.type === 'agent' && t.agentType !== OVERSEER) closeAgentSession(t.sessionId) })
-            setActive(null); activeRef.current = null
-            setTabs(keep); setActiveTab(0)
-            setTree([]); setBranches({ all: [], current: '' }); setLog([])
-          }
+          else { setActive(null); activeRef.current = null; setActiveUid(null); setTree([]); setBranches({ all: [], current: '' }); setLog([]) }
         }
       })
       .catch(e => { setDeleting(false); alert('Не удалось удалить проект: ' + (e?.response?.data?.error || e)) })
   }
 
-  function saveFile(tabIndex: number) {
-    const tab = tabs[tabIndex]
-    if (!active || tab.type !== 'file') return
+  function saveFile(uid: number) {
+    const tab = tabs.find(t => t.uid === uid)
+    if (!active || !tab || tab.type !== 'file') return
     axios.post(API + '/api/projects/' + active.id + '/file/' + encodeURIComponent(tab.filePath), { content: tab.content })
       .then(() => {
-        setTabs(prev => prev.map((t, i) => i === tabIndex && t.type === 'file' ? { ...t, dirty: false } : t))
+        setTabs(prev => prev.map(t => t.uid === uid && t.type === 'file' ? { ...t, dirty: false } : t))
         refreshTree()
       })
   }
   saveRef.current = saveFile
 
-  function closeTab(index: number, e: React.MouseEvent) {
+  function closeTab(uid: number, e: React.MouseEvent) {
     e.stopPropagation()
-    const tab = tabs[index]
-    if (tab?.type === 'agent') closeAgentSession(tab.sessionId)
-    setTabs(prev => prev.filter((_, i) => i !== index))
-    setActiveTab(prev => Math.max(0, index <= prev ? prev - 1 : prev))
+    setTabs(prev => prev.filter(t => t.uid !== uid))
+    if (activeUid === uid) {
+      const rest = tabs.filter(t => t.uid !== uid && (t.ownerProject === null || t.ownerProject === active?.id))
+      setActiveUid(rest.length ? rest[rest.length - 1].uid : null)
+    }
   }
 
   function addProject() {
@@ -220,20 +195,12 @@ export default function App() {
     axios.post<Project>(API + '/api/projects', { name }).then(r => { setProjects(p => [...p, r.data]); switchProject(r.data) })
   }
 
-  function sendMessage(sessionId: number, agentType: string) {
-    const text = (inputs[sessionId] || '').trim()
-    if (!text || streaming[sessionId]) return
-    // общий менеджер не привязан к проекту; остальным нужен активный проект
-    const projectId = agentType === OVERSEER ? OVERSEER : active?.id
-    if (!projectId) return
-    setMessages(prev => ({ ...prev, [sessionId]: [...(prev[sessionId] || []), { role: 'user', text }] }))
-    ws.current?.send(JSON.stringify({ type: 'chat', sessionId, agent: agentType, message: text, projectId }))
-    setInputs(prev => ({ ...prev, [sessionId]: '' }))
-  }
-
   const buildInfo = active ? build[active.id] : null
-  const currentTab: Tab | undefined = tabs[activeTab]
-  const activeFilePath = currentTab?.type === 'file' ? currentTab.filePath : null
+  // вкладки, видимые в баре текущего проекта (+ глобальные, напр. общий менеджер)
+  const visibleTabs = tabs.filter(t => t.ownerProject === null || t.ownerProject === active?.id)
+  const activeTab = tabs.find(t => t.uid === activeUid)
+  const activeFilePath = activeTab?.type === 'file' ? activeTab.filePath : null
+  const showEmpty = !visibleTabs.some(t => t.uid === activeUid)
 
   const actionBtn = (label: string, fn: () => void, color?: string) => (
     <button
@@ -292,53 +259,53 @@ export default function App() {
         {/* Центр: вкладки + контент */}
         <div className="flex flex-1 flex-col overflow-hidden">
           <div className="flex h-[35px] flex-shrink-0 items-end overflow-x-auto border-b border-edge bg-sidebar">
-            {tabs.map((tab, i) => (
+            {visibleTabs.map(tab => (
               <div
-                key={i}
-                onClick={() => setActiveTab(i)}
+                key={tab.uid}
+                onClick={() => activate(tab)}
                 className={
                   'flex h-[35px] flex-shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-t border-edge px-3.5 text-[13px] transition-colors ' +
-                  (activeTab === i ? 'border-t-accent bg-app text-fg' : 'border-t-transparent text-muted hover:bg-white/5')
+                  (activeUid === tab.uid ? 'border-t-accent bg-app text-fg' : 'border-t-transparent text-muted hover:bg-white/5')
                 }
               >
                 <span>{tabLabel(tab)}</span>
-                <span onClick={e => closeTab(i, e)} className="text-base leading-none text-dim transition-colors hover:text-fg">×</span>
+                <span onClick={e => closeTab(tab.uid, e)} className="text-base leading-none text-dim transition-colors hover:text-fg">×</span>
               </div>
             ))}
           </div>
 
           <div className="relative flex-1 overflow-hidden">
-            {/* Пустое состояние — нет открытых вкладок */}
-            {tabs.length === 0 && (
+            {/* Пустое состояние — нет активной видимой вкладки */}
+            {showEmpty && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 text-dim">
                 <div className="text-[28px]">🤖</div>
                 <div className="text-sm">{active ? 'Открой агента кнопками справа или файл слева' : 'Создай или выбери проект'}</div>
               </div>
             )}
 
-            {/* Сессии агентов — всегда в DOM, чтобы сохранять историю/ввод */}
-            {tabs.map((tab, i) => tab.type !== 'agent' ? null : (
-              <div key={'agent-' + tab.sessionId} className="absolute inset-0 flex-col" style={{ display: activeTab === i ? 'flex' : 'none' }}>
-                <AgentSession
-                  agentType={tab.agentType}
-                  messages={messages[tab.sessionId] || []}
-                  status={agentStatus[tab.sessionId]}
-                  streaming={!!streaming[tab.sessionId]}
-                  input={inputs[tab.sessionId] || ''}
-                  onInput={v => setInputs(prev => ({ ...prev, [tab.sessionId]: v }))}
-                  onSend={() => sendMessage(tab.sessionId, tab.agentType)}
+            {/* Все вкладки всегда смонтированы (фон не выгружается); видна только активная.
+                Благодаря этому агент/терминал продолжают работать при переключении проектов. */}
+            {/* Агенты = интерактивный claude в PTY-терминале (виден весь процесс) */}
+            {tabs.map(tab => tab.type !== 'agent' ? null : (
+              <div key={tab.uid} className="absolute inset-0 bg-app" style={{ display: activeUid === tab.uid ? 'block' : 'none' }}>
+                <TerminalPanel
+                  projectId={tab.ownerProject || ''}
+                  agent={tab.agentType}
+                  onFileSystemChange={() => {
+                    if (tab.ownerProject) refreshTree(tab.ownerProject)
+                    else axios.get<Project[]>(API + '/api/projects').then(r => setProjects(r.data))
+                  }}
                 />
               </div>
             ))}
 
-            {/* Вкладки файлов */}
-            {tabs.map((tab, i) => tab.type !== 'file' ? null : (
-              <div key={tab.filePath} className="absolute inset-0 flex-col" style={{ display: activeTab === i ? 'flex' : 'none' }}>
+            {tabs.map(tab => tab.type !== 'file' ? null : (
+              <div key={tab.uid} className="absolute inset-0 flex-col" style={{ display: activeUid === tab.uid ? 'flex' : 'none' }}>
                 <div className="flex flex-shrink-0 items-center gap-2 border-b border-edge bg-sidebar px-3 py-1">
                   <span className="font-mono text-xs text-muted">{tab.filePath}</span>
                   <span className="text-[11px] text-dim">— {getLang(tab.name)}</span>
                   {tab.dirty && <span className="text-[11px] text-gold">● несохранено</span>}
-                  <button onClick={() => saveFile(i)} className="ml-auto rounded-md border border-accent bg-accentbg px-3 py-[3px] text-xs text-white transition hover:brightness-125">Сохранить (Ctrl+S)</button>
+                  <button onClick={() => saveFile(tab.uid)} className="ml-auto rounded-md border border-accent bg-accentbg px-3 py-[3px] text-xs text-white transition hover:brightness-125">Сохранить (Ctrl+S)</button>
                 </div>
                 <div className="flex-1 overflow-hidden">
                   <Editor
@@ -346,9 +313,9 @@ export default function App() {
                     theme="vs-dark"
                     language={getLang(tab.name)}
                     value={tab.content}
-                    onChange={val => setTabs(prev => prev.map((t, ti) => ti === i && t.type === 'file' ? { ...t, content: val ?? '', dirty: true } : t))}
+                    onChange={val => setTabs(prev => prev.map(t => t.uid === tab.uid && t.type === 'file' ? { ...t, content: val ?? '', dirty: true } : t))}
                     onMount={(editor, monaco) => {
-                      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveRef.current(i))
+                      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveRef.current(tab.uid))
                       editor.focus()
                       monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
                         target: monaco.languages.typescript.ScriptTarget.ES2020,
@@ -379,9 +346,8 @@ export default function App() {
               </div>
             ))}
 
-            {/* Терминалы — всегда в DOM */}
-            {tabs.map((tab, i) => tab.type !== 'terminal' ? null : (
-              <div key={'term-' + tab.termId} className="absolute inset-0 bg-app" style={{ display: activeTab === i ? 'block' : 'none' }}>
+            {tabs.map(tab => tab.type !== 'terminal' ? null : (
+              <div key={tab.uid} className="absolute inset-0 bg-app" style={{ display: activeUid === tab.uid ? 'block' : 'none' }}>
                 <TerminalPanel projectId={tab.projectId} onFileSystemChange={() => refreshTree(tab.projectId)} />
               </div>
             ))}

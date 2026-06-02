@@ -13,15 +13,19 @@ const field =
   'px-2.5 py-2 rounded-md border border-edge bg-field text-fg text-[13px] outline-none ' +
   'transition focus:border-accent focus:ring-2 focus:ring-accent/40 disabled:opacity-60'
 
+// имя проекта из ссылки: последний сегмент пути без .git ("…/Wave.git" → "Wave")
+const deriveName = (u: string) => (u.trim().replace(/\/+$/, '').split('/').pop() || '').replace(/\.git$/i, '')
+
 export default function AddRepoModal({ open, onClose, onAdded }: Props) {
   const [url, setUrl] = useState('')
   const [name, setName] = useState('')
+  const [nameTouched, setNameTouched] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   // сброс полей при каждом открытии
   useEffect(() => {
-    if (open) { setUrl(''); setName(''); setError(''); setLoading(false) }
+    if (open) { setUrl(''); setName(''); setNameTouched(false); setError(''); setLoading(false) }
   }, [open])
 
   // Esc закрывает (кроме момента загрузки)
@@ -33,6 +37,18 @@ export default function AddRepoModal({ open, onClose, onAdded }: Props) {
   }, [open, loading, onClose])
 
   if (!open) return null
+
+  const pasteFromClipboard = async () => {
+    try {
+      const text = (await navigator.clipboard.readText()).trim()
+      if (!text) return
+      setUrl(text)
+      if (!nameTouched) setName(deriveName(text))
+      setError('')
+    } catch {
+      setError('Не удалось прочитать буфер обмена (нужен https или localhost и разрешение браузера).')
+    }
+  }
 
   const submit = () => {
     const u = url.trim()
@@ -65,21 +81,30 @@ export default function AddRepoModal({ open, onClose, onAdded }: Props) {
         <div className="flex flex-col gap-3 p-4">
           <label className="flex flex-col gap-1 text-xs text-muted">
             URL репозитория
-            <input
-              autoFocus
-              value={url}
-              onChange={e => setUrl(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') submit() }}
-              disabled={loading}
-              placeholder="https://github.com/user/repo.git"
-              className={field}
-            />
+            <div className="flex gap-2">
+              <input
+                autoFocus
+                value={url}
+                onChange={e => { const v = e.target.value; setUrl(v); if (!nameTouched) setName(deriveName(v)) }}
+                onKeyDown={e => { if (e.key === 'Enter') submit() }}
+                disabled={loading}
+                placeholder="https://github.com/user/repo.git"
+                className={field + ' flex-1'}
+              />
+              <button
+                type="button"
+                onClick={pasteFromClipboard}
+                disabled={loading}
+                title="Вставить из буфера обмена"
+                className="shrink-0 rounded-md border border-edge bg-field px-2.5 text-fg transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+              >📋</button>
+            </div>
           </label>
           <label className="flex flex-col gap-1 text-xs text-muted">
             <span>Имя проекта <span className="text-dim">(необязательно — по умолчанию из URL)</span></span>
             <input
               value={name}
-              onChange={e => setName(e.target.value)}
+              onChange={e => { setNameTouched(true); setName(e.target.value) }}
               onKeyDown={e => { if (e.key === 'Enter') submit() }}
               disabled={loading}
               placeholder="my-project"

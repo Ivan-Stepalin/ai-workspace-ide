@@ -7,10 +7,11 @@ import { WS_URL } from './config'
 
 interface Props {
   projectId: string
+  agent?: string            // если задан — в PTY запускается claude этой роли вместо bash
   onFileSystemChange?: () => void
 }
 
-export default function TerminalPanel({ projectId, onFileSystemChange }: Props) {
+export default function TerminalPanel({ projectId, agent, onFileSystemChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const termRef = useRef<XTerm | null>(null)
@@ -79,6 +80,7 @@ export default function TerminalPanel({ projectId, onFileSystemChange }: Props) 
         ws.send(JSON.stringify({
           type: 'terminal_create',
           projectId,
+          agent,
           cols: term.cols,
           rows: term.rows,
         }))
@@ -142,7 +144,7 @@ export default function TerminalPanel({ projectId, onFileSystemChange }: Props) 
       termRef.current = null
       initializedRef.current = false
     }
-  }, [projectId, send, triggerFsUpdate])
+  }, [projectId, agent, send, triggerFsUpdate])
 
   return (
     <div className="h-full w-full overflow-hidden bg-app">
