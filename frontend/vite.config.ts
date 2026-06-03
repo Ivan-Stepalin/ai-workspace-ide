@@ -22,6 +22,23 @@ export default defineConfig({
   server: { host: true, https, proxy },
   // production-сборка (npm run build && npm run preview) — настоящий PWA, тоже по https с прокси
   preview: { host: true, https, proxy },
+  build: {
+    target: 'es2020',
+    cssCodeSplit: true,
+    // Monaco-чанки (editor.api, ts.worker) большие, но грузятся лениво при открытии файла — не пугаемся
+    chunkSizeWarningLimit: 7000,
+    rollupOptions: {
+      output: {
+        // вендоры в отдельные чанки: меняются редко → долго кэшируются, грузятся параллельно с app-кодом
+        // (Monaco грузится с CDN отдельно, @monaco-editor/react уезжает в свой lazy-чанк)
+        manualChunks(id: string) {
+          if (!id.includes('node_modules')) return
+          if (id.includes('react-dom') || id.includes('/react/') || id.includes('scheduler')) return 'react'
+          if (id.includes('@xterm')) return 'xterm'
+        },
+      },
+    },
+  },
   plugins: [
     react(),
     tailwindcss(),
@@ -50,6 +67,8 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png,woff,woff2}'],
         navigateFallback: '/index.html',
         cleanupOutdatedCaches: true,
+        // Monaco забандлен локально: его воркеры (ts.worker ~6 МБ) должны попасть в precache ради офлайна
+        maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
       },
       devOptions: { enabled: true },
     }),

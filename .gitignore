@@ -18,6 +18,11 @@ certs/
 data/
 *.db
 
+# E2E (Playwright): артефакты и скриншоты
+test-results/
+playwright-report/
+e2e/__screens__/
+
 # Логи и системное
 *.log
 npm-debug.log*

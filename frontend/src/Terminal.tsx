@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, memo } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -12,7 +12,7 @@ interface Props {
   onFileSystemChange?: () => void
 }
 
-export default function TerminalPanel({ projectId, agent, wsId, onFileSystemChange }: Props) {
+function TerminalPanel({ projectId, agent, wsId, onFileSystemChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const termRef = useRef<XTerm | null>(null)
@@ -160,3 +160,9 @@ export default function TerminalPanel({ projectId, agent, wsId, onFileSystemChan
     </div>
   )
 }
+
+// memo: ререндеры App (напр. при вводе в редакторе) не должны трогать живые терминалы.
+// onFileSystemChange читается внутри через ref (onFsChangeRef) — поэтому сравниваем только
+// стабильные пропы; xterm/WS пересоздаются лишь при смене projectId/agent/wsId.
+export default memo(TerminalPanel, (a, b) =>
+  a.projectId === b.projectId && a.agent === b.agent && a.wsId === b.wsId)

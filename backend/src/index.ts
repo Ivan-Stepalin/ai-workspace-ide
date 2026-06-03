@@ -16,12 +16,32 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Прод-раздача собранного фронтенда (если есть frontend/dist) — один процесс/порт вместо отдельного Vite.
+// Путь относительно cwd бэкенда (backend/), переопределяется FRONTEND_DIST. Статика отдаётся с long-cache,
+// index.html — без кэша (чтобы новый билд подхватывался сразу). В dev-режиме (нет dist) — просто API+WS.
+const FRONTEND_DIST = process.env.FRONTEND_DIST || path.resolve('../frontend/dist');
+const serveFrontend = existsSync(FRONTEND_DIST);
+if (serveFrontend) {
+  const ASSETS_SEG = path.sep + 'assets' + path.sep;
+  app.use(express.static(FRONTEND_DIST, {
+    index: false,
+    setHeaders: (res, p) => {
+      // index.html и service worker — без кэша (новый билд подхватывается сразу);
+      // хэшированные ассеты (всё в /assets/) — кэшируем навсегда (имя меняется при пересборке).
+      if (p.endsWith('index.html') || p.endsWith('sw.js')) res.setHeader('Cache-Control', 'no-cache');
+      else if (p.includes(ASSETS_SEG)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    },
+  }));
+}
+
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
-// Терминалы/агенты переживают разрыв WS: PTY держится живым по стабильному id,
-// вывод копится в буфере, при переподключении буфер переотдаётся. GC убивает отвязанные сессии.
-const DETACH_GC_MS = 10 * 60 * 1000;   // через сколько убить отвязанный терминал
+// Терминалы/агенты живут на СЕРВЕРЕ: PTY держится живым по стабильному id, вывод копится в буфере,
+// при переподключении буфер переотдаётся. Каждая сессия привязана к воркспейсу (workspaceId =
+// projectId, либо 'overseer' для общего менеджера) — фронт при открытии проекта запрашивает список
+// живых сессий воркспейса и переподключается ко всем. GC убивает только отвязанные (закрытые) сессии.
+const DETACH_GC_MS = 30 * 60 * 1000;   // через сколько убить отвязанный (никем не открытый) терминал
 const BUF_CAP = 256 * 1024;            // размер буфера вывода
 interface Term {
   pty: ReturnType<typeof pty.spawn>;
@@ -29,8 +49,11 @@ interface Term {
   ws: WebSocket | null;
   killTimer: ReturnType<typeof setTimeout> | null;
   agent?: string;
+  workspaceId: string;   // projectId или 'overseer' — к какому воркспейсу относится сессия
+  seq: number;           // порядок создания (для стабильной сортировки при восстановлении)
 }
 const terminals: Record<string, Term> = {};
+let termSeq = 0;
 
 function killTerminal(id: string): void {
   const t = terminals[id];
@@ -55,6 +78,19 @@ function syncManagerSkills(): void {
     mkdirSync(dest, { recursive: true });
     cpSync(src, dest, { recursive: true });
   } catch (e) { console.error('skill sync failed:', e); }
+}
+
+// Управляемый CLAUDE.md в корне PROJECTS_DIR — действует на ВСЕ проекты, запускаемые из IDE
+// (агенты/терминалы работают с cwd внутри проекта → claude наследует родительский CLAUDE.md).
+// Главное правило там: приложения проекта поднимать на 0.0.0.0 (доступ по сетевому IP, не localhost).
+// Перезаписывается при каждом старте из backend/PROJECTS_CLAUDE.md (источник — в репозитории).
+function syncProjectsGuide(): void {
+  try {
+    const src = path.resolve('PROJECTS_CLAUDE.md');
+    if (!existsSync(src)) return;
+    mkdirSync(PROJECTS_DIR, { recursive: true });
+    cpSync(src, path.join(PROJECTS_DIR, 'CLAUDE.md'));
+  } catch (e) { console.error('projects guide sync failed:', e); }
 }
 
 app.get('/api/projects', (_req, res) => res.json(listProjects()));
@@ -149,6 +185,26 @@ app.post('/api/projects/:id/fs/rename', (req, res) => {
 app.post('/api/projects/:id/commit', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json({ ok: false }); await commitAll(p.path, req.body.message || 'chore: update'); res.json({ ok: true }); });
 app.post('/api/projects/:id/push', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json({ ok: false }); await pushRepo(p.path); res.json({ ok: true }); });
 
+// Живые серверные сессии воркспейса (projectId или 'overseer') — фронт переподключается ко всем при открытии.
+// Возвращаем только не завершённые PTY (вышедшие удаляются из terminals), в порядке создания.
+app.get('/api/workspaces/:wid/terminals', (req, res) => {
+  const wid = req.params.wid;
+  const list = Object.entries(terminals)
+    .filter(([, t]) => t.workspaceId === wid)
+    .sort((a, b) => a[1].seq - b[1].seq)
+    .map(([id, t]) => ({ id, agent: t.agent ?? null }));
+  res.json(list);
+});
+
+// SPA-fallback: любые не-API GET-запросы отдают index.html (клиентский роутинг). После всех /api-роутов,
+// чтобы 404 от API не перехватывались. Только в прод-режиме (есть dist).
+if (serveFrontend) {
+  app.get(/^(?!\/api\/).*/, (_req, res) => {
+    res.setHeader('Cache-Control', 'no-cache');
+    res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
+  });
+}
+
 wss.on('connection', ws => {
   ws.on('message', async (raw: Buffer) => {
     try {
@@ -160,7 +216,8 @@ wss.on('connection', ws => {
       if (msg.type === 'terminal_create') {
         const agent = msg.agent;
         let cwd: string;
-        if (agent === 'overseer') {
+        // Воркспейс overseer (общий менеджер) — cwd в корне всех проектов, и для агента, и для bash-терминала
+        if (agent === 'overseer' || msg.projectId === 'overseer') {
           cwd = PROJECTS_DIR;
         } else {
           const p = msg.projectId ? getProject(msg.projectId) : undefined;
@@ -195,7 +252,8 @@ wss.on('connection', ws => {
           cwd,
           env: { ...process.env, TERM: 'xterm-256color' } as Record<string, string>,
         });
-        const t: Term = { pty: proc, buffer: '', ws, killTimer: null, agent };
+        const workspaceId = agent === 'overseer' ? 'overseer' : (msg.projectId || '');
+        const t: Term = { pty: proc, buffer: '', ws, killTimer: null, agent, workspaceId, seq: ++termSeq };
         terminals[id] = t;
         proc.onData(data => {
           t.buffer = (t.buffer + data).slice(-BUF_CAP);
@@ -254,5 +312,6 @@ wss.on('connection', ws => {
 
 const SERVER_PORT = Number(process.env.PORT || 3001);
 syncManagerSkills();
+syncProjectsGuide();
 initTelegramBot();
 server.listen(SERVER_PORT, '0.0.0.0', () => console.log('Backend running on :' + SERVER_PORT));

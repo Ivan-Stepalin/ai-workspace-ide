@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, memo } from 'react'
 import axios from 'axios'
 import ConfirmModal from './ConfirmModal'
 
@@ -123,7 +123,7 @@ interface FileTreeProps {
 
 const fieldCls = 'flex-1 rounded-md border border-accent bg-edge px-1.5 py-0.5 text-xs text-fg outline-none'
 
-export default function FileTree({ tree, activeFile, onOpen, onRefresh, projectId, api }: FileTreeProps) {
+function FileTree({ tree, activeFile, onOpen, onRefresh, projectId, api }: FileTreeProps) {
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null)
   const [creating, setCreating] = useState<{ type: 'file' | 'dir'; parentPath: string } | null>(null)
   const [newName, setNewName] = useState('')
@@ -237,3 +237,8 @@ export default function FileTree({ tree, activeFile, onOpen, onRefresh, projectI
     </div>
   )
 }
+
+// memo: дерево перерисовывается только при смене самого дерева/активного файла/проекта,
+// а не на каждый ререндер App (напр. ввод в редакторе). Колбэки onOpen/onRefresh приходят
+// из App стабильными по идентичности (ref-обёртка/useCallback) — иначе memo был бы бесполезен.
+export default memo(FileTree)
