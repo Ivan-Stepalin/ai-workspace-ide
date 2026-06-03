@@ -333,6 +333,7 @@ export default function App({ workspaceId }: { workspaceId: string }) {
                     agent={tab.agentType}
                     wsId={tab.wsId}
                     onFileSystemChange={refreshTree}
+                    active={activeUid === tab.uid}
                   />
                 </Suspense>
               </div>
@@ -390,7 +391,7 @@ export default function App({ workspaceId }: { workspaceId: string }) {
             {tabs.map(tab => tab.type !== 'terminal' ? null : (
               <div key={tab.uid} className="absolute inset-0 bg-terminal" style={{ display: activeUid === tab.uid ? 'block' : 'none' }}>
                 <Suspense fallback={<div className="flex h-full items-center justify-center text-dim">Загрузка терминала…</div>}>
-                  <TerminalPanel projectId={workspaceId} wsId={tab.wsId} onFileSystemChange={refreshTree} />
+                  <TerminalPanel projectId={workspaceId} wsId={tab.wsId} onFileSystemChange={refreshTree} active={activeUid === tab.uid} />
                 </Suspense>
               </div>
             ))}

@@ -10,9 +10,10 @@ interface Props {
   agent?: string            // если задан — в PTY запускается claude этой роли вместо bash
   wsId: string              // стабильный id сессии — для переподключения к живому PTY после reload/новой вкладки
   onFileSystemChange?: () => void
+  active?: boolean          // true когда вкладка видима — триггер для re-fit после display:none→block
 }
 
-function TerminalPanel({ projectId, agent, wsId, onFileSystemChange }: Props) {
+function TerminalPanel({ projectId, agent, wsId, onFileSystemChange, active }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const termRef = useRef<XTerm | null>(null)
@@ -148,15 +149,27 @@ function TerminalPanel({ projectId, agent, wsId, onFileSystemChange }: Props) {
     }
   }, [projectId, agent, wsId, send, triggerFsUpdate])
 
+  // Когда вкладка становится видимой (display:none→block), пересчитываем размер.
+  // ResizeObserver не всегда ловит этот момент — делаем явно.
+  useEffect(() => {
+    if (!active) return
+    requestAnimationFrame(() => {
+      const c = containerRef.current
+      if (c && c.clientWidth > 0 && c.clientHeight > 0 && fitRef.current) {
+        fitRef.current.fit()
+      }
+    })
+  }, [active])
+
   return (
-    <div className="h-full w-full overflow-hidden bg-app">
+    <div className="h-full w-full overflow-hidden bg-terminal">
       {/* xterm рисует свой внутренний DOM — стилизуем его обычным CSS, Tailwind тут не подходит */}
       <style>{`
         .xterm { height: 100% !important; padding: 0 !important; text-align: left; }
         .xterm-viewport { overflow-y: scroll !important; }
         .xterm-screen canvas { display: block; }
       `}</style>
-      <div ref={containerRef} className="box-border h-full w-full pb-1 pl-2 pr-0 pt-1" />
+      <div ref={containerRef} className="h-full w-full" />
     </div>
   )
 }
@@ -165,4 +178,4 @@ function TerminalPanel({ projectId, agent, wsId, onFileSystemChange }: Props) {
 // onFileSystemChange читается внутри через ref (onFsChangeRef) — поэтому сравниваем только
 // стабильные пропы; xterm/WS пересоздаются лишь при смене projectId/agent/wsId.
 export default memo(TerminalPanel, (a, b) =>
-  a.projectId === b.projectId && a.agent === b.agent && a.wsId === b.wsId)
+  a.projectId === b.projectId && a.agent === b.agent && a.wsId === b.wsId && a.active === b.active)
