@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import compression from 'compression';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'http';
 import cors from 'cors';
@@ -7,18 +8,16 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, renameSync,
 import path from 'path';
 import * as pty from 'node-pty';
 import { PROMPTS } from './agents.js';
-import { getLog, getBranches, commitAll, pushRepo, getFiles, getFileTree } from './git.js';
+import { getLog, getBranches, commitAll, pushRepo, getFiles, getFileTree, invalidateGitCache } from './git.js';
 import { listProjects, createProject, getProject, cloneRepo, deleteProject, PROJECTS_DIR } from './projects.js';
 import { initTelegramBot } from './telegram.js';
 import { WsMessage } from './types.js';
 
 const app = express();
 app.use(cors());
+app.use(compression());
 app.use(express.json());
 
-// Прод-раздача собранного фронтенда (если есть frontend/dist) — один процесс/порт вместо отдельного Vite.
-// Путь относительно cwd бэкенда (backend/), переопределяется FRONTEND_DIST. Статика отдаётся с long-cache,
-// index.html — без кэша (чтобы новый билд подхватывался сразу). В dev-режиме (нет dist) — просто API+WS.
 const FRONTEND_DIST = process.env.FRONTEND_DIST || path.resolve('../frontend/dist');
 const serveFrontend = existsSync(FRONTEND_DIST);
 if (serveFrontend) {
@@ -26,8 +25,6 @@ if (serveFrontend) {
   app.use(express.static(FRONTEND_DIST, {
     index: false,
     setHeaders: (res, p) => {
-      // index.html и service worker — без кэша (новый билд подхватывается сразу);
-      // хэшированные ассеты (всё в /assets/) — кэшируем навсегда (имя меняется при пересборке).
       if (p.endsWith('index.html') || p.endsWith('sw.js')) res.setHeader('Cache-Control', 'no-cache');
       else if (p.includes(ASSETS_SEG)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     },
@@ -37,39 +34,53 @@ if (serveFrontend) {
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
-// Терминалы/агенты живут на СЕРВЕРЕ: PTY держится живым по стабильному id, вывод копится в буфере,
-// при переподключении буфер переотдаётся. Каждая сессия привязана к воркспейсу (workspaceId =
-// projectId, либо 'overseer' для общего менеджера) — фронт при открытии проекта запрашивает список
-// живых сессий воркспейса и переподключается ко всем. GC убивает только отвязанные (закрытые) сессии.
-const DETACH_GC_MS = 30 * 60 * 1000;   // через сколько убить отвязанный (никем не открытый) терминал
-const BUF_CAP = 256 * 1024;            // размер буфера вывода
+const DETACH_GC_MS = 30 * 60 * 1000;
+const BUF_CAP = 256 * 1024;
+const FLUSH_MS = 16; // batch terminal output ~60fps
+
 interface Term {
   pty: ReturnType<typeof pty.spawn>;
-  buffer: string;
+  // Кольцевой буфер: массив чанков + суммарная длина; соединяется только при переподключении.
+  bufferChunks: string[];
+  bufferLen: number;
+  // Батчинг WS-сообщений: накапливаем данные между тиками таймера.
+  pendingData: string;
+  flushTimer: ReturnType<typeof setTimeout> | null;
   ws: WebSocket | null;
   killTimer: ReturnType<typeof setTimeout> | null;
   agent?: string;
-  workspaceId: string;   // projectId или 'overseer' — к какому воркспейсу относится сессия
-  seq: number;           // порядок создания (для стабильной сортировки при восстановлении)
+  workspaceId: string;
+  seq: number;
 }
 const terminals: Record<string, Term> = {};
 let termSeq = 0;
+
+// Подписки: главный WS каждого воркспейса регистрируется для получения broadcast-событий.
+const wsSubscriptions = new Map<WebSocket, string>();
 
 function killTerminal(id: string): void {
   const t = terminals[id];
   if (!t) return;
   if (t.killTimer) clearTimeout(t.killTimer);
+  if (t.flushTimer) { clearTimeout(t.flushTimer); t.flushTimer = null; }
   try { t.pty.kill(); } catch { /* ignore */ }
   delete terminals[id];
 }
 
+// Глобальный broadcast (projects_updated и т.п. — нужен всем вкладкам).
 function broadcast(data: object): void {
   const msg = JSON.stringify(data);
   wss.clients.forEach(c => c.readyState === WebSocket.OPEN && c.send(msg));
 }
 
-// Общий менеджер запускается с cwd = PROJECTS_DIR. Чтобы claude CLI подхватил навыки,
-// копируем их из репозитория (backend/skills) в PROJECTS_DIR/.claude/skills при старте.
+// Broadcast только подписчикам конкретного воркспейса (tree_updated, file_changed).
+function broadcastToWorkspace(workspaceId: string, data: object): void {
+  const msg = JSON.stringify(data);
+  wss.clients.forEach(c => {
+    if (c.readyState === WebSocket.OPEN && wsSubscriptions.get(c) === workspaceId) c.send(msg);
+  });
+}
+
 function syncManagerSkills(): void {
   try {
     const src = path.resolve('skills');
@@ -80,10 +91,6 @@ function syncManagerSkills(): void {
   } catch (e) { console.error('skill sync failed:', e); }
 }
 
-// Управляемый CLAUDE.md в корне PROJECTS_DIR — действует на ВСЕ проекты, запускаемые из IDE
-// (агенты/терминалы работают с cwd внутри проекта → claude наследует родительский CLAUDE.md).
-// Главное правило там: приложения проекта поднимать на 0.0.0.0 (доступ по сетевому IP, не localhost).
-// Перезаписывается при каждом старте из backend/PROJECTS_CLAUDE.md (источник — в репозитории).
 function syncProjectsGuide(): void {
   try {
     const src = path.resolve('PROJECTS_CLAUDE.md');
@@ -132,11 +139,11 @@ app.post('/api/projects/:id/file/*', (req, res) => {
   try {
     const filename = (req.params as Record<string, string>)[0];
     writeFileSync(path.join(p.path, filename), req.body.content, 'utf-8');
+    invalidateGitCache(p.path);
     res.json({ ok: true });
   } catch { res.status(500).json({ error: 'Write failed' }); }
 });
 
-// FS operations: create file
 app.post('/api/projects/:id/fs/file', (req, res) => {
   const p = getProject(req.params.id);
   if (!p) return res.status(404).json({ error: 'Not found' });
@@ -144,33 +151,32 @@ app.post('/api/projects/:id/fs/file', (req, res) => {
     const filePath = path.join(p.path, req.body.path);
     mkdirSync(path.dirname(filePath), { recursive: true });
     writeFileSync(filePath, req.body.content || '', 'utf-8');
+    invalidateGitCache(p.path);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
-// FS operations: create dir
 app.post('/api/projects/:id/fs/dir', (req, res) => {
   const p = getProject(req.params.id);
   if (!p) return res.status(404).json({ error: 'Not found' });
   try {
     mkdirSync(path.join(p.path, req.body.path), { recursive: true });
+    invalidateGitCache(p.path);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
-// FS operations: delete
 app.delete('/api/projects/:id/fs/*', (req, res) => {
   const p = getProject(req.params.id);
   if (!p) return res.status(404).json({ error: 'Not found' });
   try {
     const fsPath = path.join(p.path, (req.params as Record<string, string>)[0]);
     if (existsSync(fsPath)) rmSync(fsPath, { recursive: true, force: true });
+    invalidateGitCache(p.path);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
-
-// FS: rename
 app.post('/api/projects/:id/fs/rename', (req, res) => {
   const p = getProject(req.params.id);
   if (!p) return res.status(404).json({ error: 'Not found' });
@@ -178,6 +184,7 @@ app.post('/api/projects/:id/fs/rename', (req, res) => {
     const oldPath = path.join(p.path, req.body.oldPath);
     const newPath = path.join(p.path, req.body.newPath);
     renameSync(oldPath, newPath);
+    invalidateGitCache(p.path);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
@@ -185,8 +192,6 @@ app.post('/api/projects/:id/fs/rename', (req, res) => {
 app.post('/api/projects/:id/commit', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json({ ok: false }); await commitAll(p.path, req.body.message || 'chore: update'); res.json({ ok: true }); });
 app.post('/api/projects/:id/push', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json({ ok: false }); await pushRepo(p.path); res.json({ ok: true }); });
 
-// Живые серверные сессии воркспейса (projectId или 'overseer') — фронт переподключается ко всем при открытии.
-// Возвращаем только не завершённые PTY (вышедшие удаляются из terminals), в порядке создания.
 app.get('/api/workspaces/:wid/terminals', (req, res) => {
   const wid = req.params.wid;
   const list = Object.entries(terminals)
@@ -196,8 +201,6 @@ app.get('/api/workspaces/:wid/terminals', (req, res) => {
   res.json(list);
 });
 
-// SPA-fallback: любые не-API GET-запросы отдают index.html (клиентский роутинг). После всех /api-роутов,
-// чтобы 404 от API не перехватывались. Только в прод-режиме (есть dist).
 if (serveFrontend) {
   app.get(/^(?!\/api\/).*/, (_req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
@@ -210,13 +213,15 @@ wss.on('connection', ws => {
     try {
       const msg = JSON.parse(raw.toString()) as WsMessage;
 
-      // Создание терминала. Если задан agent — в PTY запускается интерактивный claude
-      // с ролевым системным промптом (виден весь процесс; скиллы берутся из cwd/.claude/skills),
-      // иначе обычный bash. Общий менеджер (overseer) работает в корне всех проектов.
+      // Подписка главного WS воркспейса — для получения scoped-бродкастов (tree_updated и т.п.).
+      if (msg.type === 'subscribe' && msg.workspaceId) {
+        wsSubscriptions.set(ws, msg.workspaceId);
+        return;
+      }
+
       if (msg.type === 'terminal_create') {
         const agent = msg.agent;
         let cwd: string;
-        // Воркспейс overseer (общий менеджер) — cwd в корне всех проектов, и для агента, и для bash-терминала
         if (agent === 'overseer' || msg.projectId === 'overseer') {
           cwd = PROJECTS_DIR;
         } else {
@@ -226,14 +231,16 @@ wss.on('connection', ws => {
         }
         const id = msg.terminalId || ('term_' + Date.now() + '_' + Math.random().toString(36).slice(2));
 
-        // Переподключение к живой сессии: гасим GC, перевязываем ws, переотдаём буфер вывода
+        // Переподключение: гасим GC, перевязываем ws, сбрасываем накопленный буфер одним сообщением.
         const existing = terminals[id];
         if (existing) {
           if (existing.killTimer) { clearTimeout(existing.killTimer); existing.killTimer = null; }
           existing.ws = ws;
           try { existing.pty.resize(msg.cols || 120, msg.rows || 30); } catch { /* ignore */ }
           ws.send(JSON.stringify({ type: 'terminal_ready', terminalId: id }));
-          if (existing.buffer) ws.send(JSON.stringify({ type: 'terminal_data', data: existing.buffer, terminalId: id }));
+          if (existing.bufferLen > 0) {
+            ws.send(JSON.stringify({ type: 'terminal_data', data: existing.bufferChunks.join(''), terminalId: id }));
+          }
           return;
         }
 
@@ -253,19 +260,49 @@ wss.on('connection', ws => {
           env: { ...process.env, TERM: 'xterm-256color' } as Record<string, string>,
         });
         const workspaceId = agent === 'overseer' ? 'overseer' : (msg.projectId || '');
-        const t: Term = { pty: proc, buffer: '', ws, killTimer: null, agent, workspaceId, seq: ++termSeq };
+        const t: Term = {
+          pty: proc,
+          bufferChunks: [], bufferLen: 0,
+          pendingData: '', flushTimer: null,
+          ws, killTimer: null,
+          agent, workspaceId, seq: ++termSeq,
+        };
         terminals[id] = t;
+
         proc.onData(data => {
-          t.buffer = (t.buffer + data).slice(-BUF_CAP);
-          if (t.ws && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ type: 'terminal_data', data, terminalId: id }));
+          // Кольцевой буфер: O(1) запись, O(n) чтение при переподключении (редко).
+          t.bufferChunks.push(data);
+          t.bufferLen += data.length;
+          while (t.bufferLen > BUF_CAP && t.bufferChunks.length > 0) {
+            t.bufferLen -= t.bufferChunks[0].length;
+            t.bufferChunks.shift();
+          }
+          if (!t.ws || t.ws.readyState !== WebSocket.OPEN) return;
+          t.pendingData += data;
+          if (t.flushTimer === null) {
+            t.flushTimer = setTimeout(() => {
+              t.flushTimer = null;
+              if (t.ws && t.ws.readyState === WebSocket.OPEN && t.pendingData) {
+                t.ws.send(JSON.stringify({ type: 'terminal_data', data: t.pendingData, terminalId: id }));
+              }
+              t.pendingData = '';
+            }, FLUSH_MS);
+          }
         });
+
         proc.onExit(() => {
-          if (t.ws && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ type: 'terminal_exit', terminalId: id }));
+          // Сбрасываем незаотправленные данные перед сигналом о завершении.
+          if (t.flushTimer) { clearTimeout(t.flushTimer); t.flushTimer = null; }
+          if (t.ws && t.ws.readyState === WebSocket.OPEN) {
+            if (t.pendingData) t.ws.send(JSON.stringify({ type: 'terminal_data', data: t.pendingData, terminalId: id }));
+            t.ws.send(JSON.stringify({ type: 'terminal_exit', terminalId: id }));
+          }
+          t.pendingData = '';
           if (t.killTimer) clearTimeout(t.killTimer);
           delete terminals[id];
-          // агент мог склонировать репозиторий / изменить файлы — обновим список проектов
           if (agent) broadcast({ type: 'projects_updated' });
         });
+
         ws.send(JSON.stringify({ type: 'terminal_ready', terminalId: id }));
         return;
       }
@@ -280,16 +317,17 @@ wss.on('connection', ws => {
         return;
       }
 
-      // Явное закрытие вкладки пользователем — убиваем PTY сразу (иначе ждал бы GC)
       if (msg.type === 'terminal_close' && msg.terminalId) {
         killTerminal(msg.terminalId);
         return;
       }
 
-      // Tree refresh request from terminal
       if (msg.type === 'tree_refresh' && msg.projectId) {
         const p = getProject(msg.projectId);
-        if (p) broadcast({ type: 'tree_updated', projectId: msg.projectId, tree: getFileTree(p.path) });
+        if (p) {
+          invalidateGitCache(p.path);
+          broadcastToWorkspace(msg.projectId, { type: 'tree_updated', projectId: msg.projectId, tree: getFileTree(p.path) });
+        }
         return;
       }
     } catch (e) {
@@ -298,7 +336,7 @@ wss.on('connection', ws => {
   });
 
   ws.on('close', () => {
-    // не убиваем терминалы сразу — даём шанс переподключиться (новая вкладка/перезагрузка); GC уберёт через DETACH_GC_MS
+    wsSubscriptions.delete(ws);
     for (const id in terminals) {
       const t = terminals[id];
       if (t.ws === ws) {

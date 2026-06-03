@@ -34,6 +34,7 @@ export interface WsMessage {
   agent?: string;
   message?: string;
   projectId?: string;
+  workspaceId?: string;
   sessionId?: string | number;
   text?: string;
   project?: string;

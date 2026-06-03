@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, memo } from 'react'
+import { useState, useEffect, useRef, memo, useCallback } from 'react'
 import axios from 'axios'
 import ConfirmModal from './ConfirmModal'
 
@@ -35,7 +35,7 @@ interface NodeProps {
   onCtxMenu: (e: React.MouseEvent, node: FileNode) => void
 }
 
-function Node({ node, depth, activeFile, onOpen, onCtxMenu }: NodeProps) {
+const Node = memo(function Node({ node, depth, activeFile, onOpen, onCtxMenu }: NodeProps) {
   const [open, setOpen] = useState(depth < 1)
   const isActive = node.type === 'file' && activeFile === node.path
   const pad = 6 + depth * 16
@@ -73,7 +73,7 @@ function Node({ node, depth, activeFile, onOpen, onCtxMenu }: NodeProps) {
       <span className="overflow-hidden text-ellipsis whitespace-nowrap">{node.name}</span>
     </div>
   )
-}
+})
 
 interface ContextMenuProps {
   menu: CtxMenu; onClose: () => void
@@ -125,6 +125,9 @@ const fieldCls = 'flex-1 rounded-md border border-accent bg-edge px-1.5 py-0.5 t
 
 function FileTree({ tree, activeFile, onOpen, onRefresh, projectId, api }: FileTreeProps) {
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null)
+  const onCtxMenu = useCallback((e: React.MouseEvent, node: FileNode) => {
+    setCtxMenu({ x: e.clientX, y: e.clientY, node })
+  }, [])
   const [creating, setCreating] = useState<{ type: 'file' | 'dir'; parentPath: string } | null>(null)
   const [newName, setNewName] = useState('')
   const [renaming, setRenaming] = useState<{ node: FileNode } | null>(null)
@@ -209,7 +212,7 @@ function FileTree({ tree, activeFile, onOpen, onRefresh, projectId, api }: FileT
       <div className="flex-1 overflow-y-auto">
         {tree.length === 0
           ? <div className="px-4 py-2 text-xs italic text-dim">пусто</div>
-          : tree.map(node => <Node key={node.path} node={node} depth={0} activeFile={activeFile} onOpen={onOpen} onCtxMenu={(e, n) => setCtxMenu({ x: e.clientX, y: e.clientY, node: n })} />)
+          : tree.map(node => <Node key={node.path} node={node} depth={0} activeFile={activeFile} onOpen={onOpen} onCtxMenu={onCtxMenu} />)
         }
       </div>
 

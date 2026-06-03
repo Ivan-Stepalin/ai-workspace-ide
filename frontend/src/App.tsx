@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react'
 import axios from 'axios'
 import FileTree, { FileNode } from './FileTree'
 import AddRepoModal from './AddRepoModal'
@@ -90,20 +90,25 @@ export default function App({ workspaceId }: { workspaceId: string }) {
 
   // ── Инициализация воркспейса: имя/дерево/git + переподключение ко всем живым серверным сессиям ──
   useEffect(() => {
-    // 1. метаданные проекта (для overseer не нужны)
+    // 1. метаданные проекта — все 4 запроса параллельно (было 4 последовательных)
     if (!isOverseer) {
-      axios.get<Project[]>(API + '/api/projects').then(r => {
-        const p = r.data.find(x => x.id === workspaceId)
+      Promise.all([
+        axios.get<Project[]>(API + '/api/projects'),
+        axios.get<FileNode[]>(API + '/api/projects/' + workspaceId + '/tree'),
+        axios.get<GitBranches>(API + '/api/projects/' + workspaceId + '/branches'),
+        axios.get<GitCommit[]>(API + '/api/projects/' + workspaceId + '/log'),
+      ]).then(([projectsRes, treeRes, branchesRes, logRes]) => {
+        const p = projectsRes.data.find(x => x.id === workspaceId)
         if (!p) { setNotFound(true); return }
         setWsName(p.name)
-        axios.get<FileNode[]>(API + '/api/projects/' + workspaceId + '/tree').then(t => setTree(t.data))
-        axios.get<GitBranches>(API + '/api/projects/' + workspaceId + '/branches').then(t => setBranches(t.data))
-        axios.get<GitCommit[]>(API + '/api/projects/' + workspaceId + '/log').then(t => setLog(t.data))
+        setTree(treeRes.data)
+        setBranches(branchesRes.data)
+        setLog(logRes.data)
       })
     }
 
     // 2. живые серверные сессии этого воркспейса → вкладки агентов/терминалов (переподключение по wsId)
-    axios.get<ServerTerm[]>(API + '/api/workspaces/' + workspaceId + '/terminals').then(r => {
+    axios.get<ServerTerm[]>(API + '/api/workspaces/' + workspaceId + '/terminals').then(async r => {
       const restored: Tab[] = r.data.map(st => {
         if (st.agent) {
           const num = agentNums.current[st.agent] = (agentNums.current[st.agent] || 0) + 1
@@ -113,26 +118,37 @@ export default function App({ workspaceId }: { workspaceId: string }) {
         return { uid: ++uidCounter.current, type: 'terminal', num, wsId: st.id }
       })
 
-      // 3. файловые вкладки из localStorage (контент дозагружаем)
+      // 3. файловые вкладки из localStorage — контент всех файлов грузим параллельно
       const fileTabs: Tab[] = persisted.files.map(f => ({ uid: ++uidCounter.current, type: 'file', name: f.name, filePath: f.filePath, content: '', dirty: false }))
 
       const all = [...restored, ...fileTabs]
       setTabs(all)
-      // активная вкладка: по сохранённому ключу, иначе первая
       const act = all.find(t => tabKey(t) === persisted.activeKey) || all[0]
       setActiveUid(act ? act.uid : null)
 
-      for (const f of fileTabs) {
-        if (f.type !== 'file') continue
-        axios.get<{ content: string }>(API + '/api/projects/' + workspaceId + '/file/' + encodeURIComponent(f.filePath))
-          .then(c => setTabs(ts => ts.map(x => x.uid === f.uid && x.type === 'file' ? { ...x, content: c.data.content, dirty: false } : x)))
-          .catch(() => setTabs(ts => ts.filter(x => x.uid !== f.uid)))  // файл исчез
-      }
+      // Параллельная загрузка контента всех файловых вкладок
+      const fileLoads = await Promise.all(
+        fileTabs.filter(f => f.type === 'file').map(f =>
+          axios.get<{ content: string }>(API + '/api/projects/' + workspaceId + '/file/' + encodeURIComponent(f.filePath))
+            .then(c => ({ uid: f.uid, content: c.data.content, ok: true }))
+            .catch(() => ({ uid: f.uid, content: '', ok: false }))
+        )
+      )
+      const missingUids = new Set(fileLoads.filter(fl => !fl.ok).map(fl => fl.uid))
+      setTabs(ts =>
+        ts
+          .filter(x => !missingUids.has(x.uid))
+          .map(x => {
+            const loaded = fileLoads.find(fl => fl.uid === x.uid && fl.ok)
+            return (loaded && x.type === 'file') ? { ...x, content: loaded.content, dirty: false } : x
+          })
+      )
     })
 
-    // 4. главный WS — только бродкасты (file_changed/tree_updated) и отправка terminal_close
+    // 4. главный WS — подписка на бродкасты воркспейса + отправка terminal_close
     const socket = new WebSocket(WS_URL)
     ws.current = socket
+    socket.onopen = () => socket.send(JSON.stringify({ type: 'subscribe', workspaceId }))
     socket.onmessage = (e: MessageEvent) => {
       const data = JSON.parse(e.data)
       if (data.type === 'tree_updated' && data.projectId === workspaceId) setTree(data.tree)
@@ -214,7 +230,7 @@ export default function App({ workspaceId }: { workspaceId: string }) {
     }
   }
 
-  const activeTab = tabs.find(t => t.uid === activeUid)
+  const activeTab = useMemo(() => tabs.find(t => t.uid === activeUid), [tabs, activeUid])
   const activeFilePath = activeTab?.type === 'file' ? activeTab.filePath : null
   const showEmpty = !activeTab
 
