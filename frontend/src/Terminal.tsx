@@ -166,7 +166,7 @@ function TerminalPanel({ projectId, agent, wsId, onFileSystemChange, active }: P
       {/* xterm рисует свой внутренний DOM — стилизуем его обычным CSS, Tailwind тут не подходит */}
       <style>{`
         .xterm { height: 100% !important; padding: 0 !important; text-align: left; }
-        .xterm-viewport { overflow-y: scroll !important; }
+        .xterm-viewport { overflow-y: scroll !important; background-color: transparent !important; }
         .xterm-screen canvas { display: block; }
       `}</style>
       <div ref={containerRef} className="h-full w-full" />
