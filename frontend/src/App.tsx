@@ -254,16 +254,13 @@ export default function App({ workspaceId }: { workspaceId: string }) {
 
   return (
     <div className="flex h-screen flex-col bg-app text-[13px] text-fg">
-      {/* Верхняя панель: имя воркспейса + открыть другой проект */}
-      <div className="flex h-11 flex-shrink-0 items-center gap-2 border-b border-edge bg-topbar px-2">
-        <button onClick={() => { setRightOpen(false); setLeftOpen(o => !o) }} title="Проводник" className="rounded-md px-2 py-1.5 text-lg leading-none text-muted transition-colors hover:bg-white/5 hover:text-fg lg:hidden">☰</button>
-        <span className="flex items-center gap-1.5 truncate pl-1 text-sm font-medium">
-          {isOverseer && <span style={{ color: agentColors.overseer }}>🧭</span>}
-          {wsName}
-        </span>
-        <button onClick={openLauncher} title="Открыть другой проект в новой вкладке" className="ml-2 rounded-md border border-edge px-2.5 py-1 text-xs text-muted transition-colors hover:bg-white/5 hover:text-fg">↗ Другой проект</button>
-        <span className="ml-auto hidden font-mono text-[11px] text-dim md:inline">{BACKEND_HOST}</span>
-        <button onClick={() => { setLeftOpen(false); setRightOpen(o => !o) }} title="Действия" className="ml-1 rounded-md px-2 py-1.5 text-lg leading-none text-muted transition-colors hover:bg-white/5 hover:text-fg lg:hidden">⚙</button>
+      {/* Верхняя панель */}
+      <div className="flex h-11 flex-shrink-0 items-center border-b border-edge bg-topbar px-4">
+        <button onClick={() => { setRightOpen(false); setLeftOpen(o => !o) }} title="Проводник" className="mr-2 rounded px-1.5 py-1 text-base leading-none text-muted transition-colors hover:text-fg lg:hidden">☰</button>
+        <span className="text-[15px] font-semibold tracking-tight" style={{ color: '#4fc3f7' }}>AI Workspace IDE</span>
+        <button onClick={openLauncher} title="Открыть другой проект в новой вкладке" className="ml-3 rounded border border-edge px-2 py-0.5 text-xs text-muted transition-colors hover:bg-white/5 hover:text-fg">↗</button>
+        <span className="ml-auto text-[13px] text-muted">{isOverseer ? 'Общий менеджер' : 'Project: ' + wsName}</span>
+        <button onClick={() => { setLeftOpen(false); setRightOpen(o => !o) }} title="Действия" className="ml-3 rounded px-1.5 py-1 text-base leading-none text-muted transition-colors hover:text-fg lg:hidden">⚙</button>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
@@ -283,18 +280,18 @@ export default function App({ workspaceId }: { workspaceId: string }) {
             'lg:static lg:top-auto lg:z-auto lg:w-[240px] lg:max-w-none lg:translate-x-0 lg:shadow-none ' +
             (leftOpen ? 'translate-x-0 shadow-2xl shadow-black/50' : '-translate-x-full')
           }>
-            <div className="flex flex-shrink-0 items-center gap-2 border-b border-edge px-3 py-2 text-[11px] font-semibold tracking-[0.08em] text-muted">
-              <span className="truncate">ПРОВОДНИК <span className="font-normal text-dim">— {wsName}</span></span>
+            <div className="flex flex-shrink-0 items-center gap-2 border-b border-edge px-3 py-2">
+              <span className="text-[11px] font-bold tracking-[0.1em]" style={{ color: '#4fc3f7' }}>FILES</span>
               <button onClick={() => setLeftOpen(false)} title="Закрыть" className="ml-auto rounded px-1.5 text-lg leading-none text-muted transition-colors hover:bg-white/10 hover:text-fg lg:hidden">×</button>
             </div>
             <div className="flex flex-1 flex-col overflow-hidden">
               <FileTree tree={tree} activeFile={activeFilePath} onOpen={openFileStable} onRefresh={refreshTree} projectId={workspaceId} api={API} />
             </div>
-            <div className="flex-shrink-0 border-t border-edge py-1.5">
-              <div className="mb-1 px-3 text-[11px] text-dim">ВЕТКИ</div>
+            <div className="flex-shrink-0 border-t border-edge py-2">
+              <div className="mb-1.5 px-3 text-[10px] font-bold tracking-[0.1em] text-muted">BRANCHES</div>
               {branches.all.map(b => (
-                <div key={b} className={'flex items-center gap-1.5 px-4 py-0.5 text-xs ' + (b === branches.current ? 'text-mint' : 'text-muted')}>
-                  <span className="text-[9px]">{b === branches.current ? '●' : '○'}</span>{b}
+                <div key={b} className={'flex items-center gap-1.5 px-4 py-0.5 text-[12px] ' + (b === branches.current ? 'font-medium' : 'text-muted')} style={b === branches.current ? { color: '#4fc3f7' } : undefined}>
+                  <span className="text-[9px]">{b === branches.current ? '⊙' : '○'}</span>{b}
                 </div>
               ))}
             </div>
@@ -303,18 +300,18 @@ export default function App({ workspaceId }: { workspaceId: string }) {
 
         {/* Центр: вкладки + контент */}
         <div className="flex flex-1 flex-col overflow-hidden">
-          <div className="flex h-10 flex-shrink-0 items-end overflow-x-auto border-b border-edge bg-sidebar">
+          <div className="flex h-11 flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-edge bg-sidebar px-2">
             {tabs.map(tab => (
               <div
                 key={tab.uid}
                 onClick={() => setActiveUid(tab.uid)}
                 className={
-                  'flex h-10 flex-shrink-0 cursor-pointer select-none items-center gap-2 border-r border-t-2 border-edge px-4 text-[13px] transition-colors ' +
-                  (activeUid === tab.uid ? 'border-t-accent bg-app text-fg' : 'border-t-transparent text-muted hover:bg-white/5')
+                  'flex h-7 flex-shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-md px-3 text-[13px] transition-colors ' +
+                  (activeUid === tab.uid ? 'bg-accent text-white' : 'text-muted hover:bg-white/5 hover:text-fg')
                 }
               >
                 <span>{tabLabel(tab)}</span>
-                <span onClick={e => closeTab(tab.uid, e)} className="rounded px-1 text-lg leading-none text-dim transition-colors hover:bg-white/10 hover:text-fg">×</span>
+                <span onClick={e => closeTab(tab.uid, e)} className="ml-0.5 text-base leading-none opacity-50 transition-opacity hover:opacity-100">×</span>
               </div>
             ))}
           </div>
@@ -329,7 +326,7 @@ export default function App({ workspaceId }: { workspaceId: string }) {
 
             {/* Все вкладки смонтированы постоянно (фон не выгружается) — агенты/терминалы продолжают работать */}
             {tabs.map(tab => tab.type !== 'agent' ? null : (
-              <div key={tab.uid} className="absolute inset-0 bg-app" style={{ display: activeUid === tab.uid ? 'block' : 'none' }}>
+              <div key={tab.uid} className="absolute inset-0 bg-terminal" style={{ display: activeUid === tab.uid ? 'block' : 'none' }}>
                 <Suspense fallback={<div className="flex h-full items-center justify-center text-dim">Загрузка терминала…</div>}>
                   <TerminalPanel
                     projectId={workspaceId}
@@ -391,7 +388,7 @@ export default function App({ workspaceId }: { workspaceId: string }) {
             ))}
 
             {tabs.map(tab => tab.type !== 'terminal' ? null : (
-              <div key={tab.uid} className="absolute inset-0 bg-app" style={{ display: activeUid === tab.uid ? 'block' : 'none' }}>
+              <div key={tab.uid} className="absolute inset-0 bg-terminal" style={{ display: activeUid === tab.uid ? 'block' : 'none' }}>
                 <Suspense fallback={<div className="flex h-full items-center justify-center text-dim">Загрузка терминала…</div>}>
                   <TerminalPanel projectId={workspaceId} wsId={tab.wsId} onFileSystemChange={refreshTree} />
                 </Suspense>
@@ -413,40 +410,38 @@ export default function App({ workspaceId }: { workspaceId: string }) {
 
           {isOverseer ? (
             <>
-              <div className={sectionCls + ' border-b border-edge'}>ОБЩИЙ МЕНЕДЖЕР</div>
-              <div className="flex flex-col gap-2 p-3">
-                {actionBtn('🧭 Открыть менеджера', () => openAgent(OVERSEER), agentColors.overseer)}
-                {actionBtn('➕ Добавить репозиторий', () => setRepoModalOpen(true))}
-                {actionBtn('⌨ Терминал', openTerminal)}
+              <div className="border-b border-edge px-3 py-2 text-[10px] font-bold tracking-[0.1em] text-muted">ОБЩИЙ МЕНЕДЖЕР</div>
+              <div className="flex flex-col gap-1.5 p-3">
+                <button onClick={() => openAgent(OVERSEER)} className="w-full rounded-md bg-accent px-3 py-2 text-left text-[13px] text-white transition hover:brightness-110">🧭 Открыть менеджера</button>
+                <button onClick={() => setRepoModalOpen(true)} className="w-full rounded-md bg-btnbg px-3 py-2 text-left text-[13px] text-fg transition hover:bg-white/10">➕ Добавить репозиторий</button>
+                <button onClick={openTerminal} className="w-full rounded-md bg-btnbg px-3 py-2 text-left text-[13px] text-fg transition hover:bg-white/10">⌨ Терминал</button>
               </div>
             </>
           ) : (
             <>
-              <div className={sectionCls + ' border-b border-edge'}>SOURCE CONTROL</div>
-              <div className="max-h-[180px] overflow-y-auto p-2">
-                {log.length === 0 && <div className="px-1 py-0.5 text-xs text-dim">Нет коммитов</div>}
+              <div className="border-b border-edge px-3 py-2 text-[10px] font-bold tracking-[0.1em] text-muted">GIT LOG</div>
+              <div className="max-h-[200px] overflow-y-auto px-3 py-2">
+                {log.length === 0 && <div className="py-1 text-xs text-dim">Нет коммитов</div>}
                 {log.slice(0, 10).map(c => (
-                  <div key={c.hash} className="flex gap-1.5 px-1 py-0.5 text-[11px]">
-                    <span className="flex-shrink-0 font-mono text-accent">{c.hash}</span>
-                    <span className="overflow-hidden text-ellipsis whitespace-nowrap text-muted">{c.message}</span>
+                  <div key={c.hash} className="py-1">
+                    <div className="font-mono text-[12px] font-semibold text-fg">{c.hash} <span className="font-normal text-muted">{c.message}</span></div>
                   </div>
                 ))}
               </div>
 
-              <div className={sectionCls + ' border-t border-edge'}>ДЕЙСТВИЯ <span className="font-normal text-dim">— {wsName}</span></div>
-              <div className="flex flex-col gap-2 p-3">
-                {AGENTS.map(a => actionBtn('🤖 ' + a.label, () => openAgent(a.type), agentColors[a.type]))}
-                {actionBtn('⌨ Терминал', openTerminal)}
-                {actionBtn('Коммит', () => setPromptCfg({ title: 'Коммит', label: 'Сообщение коммита', placeholder: 'chore: update', confirmLabel: 'Закоммитить', onSubmit: m => axios.post(API + '/api/projects/' + workspaceId + '/commit', { message: m }).then(() => { refreshTree(); axios.get<GitCommit[]>(API + '/api/projects/' + workspaceId + '/log').then(r => setLog(r.data)) }) }))}
-                {actionBtn('Push', () => axios.post(API + '/api/projects/' + workspaceId + '/push'))}
+              <div className="border-t border-edge" />
+              <div className="flex flex-col gap-1.5 p-3">
+                {AGENTS.map(a => (
+                  <button key={a.type} onClick={() => openAgent(a.type)} className="w-full rounded-md bg-accent px-3 py-2 text-left text-[13px] text-white transition hover:brightness-110" style={{ backgroundColor: agentColors[a.type] }}>
+                    + {a.label}
+                  </button>
+                ))}
+                <button onClick={openTerminal} className="w-full rounded-md bg-btnbg px-3 py-2 text-left text-[13px] text-fg transition hover:bg-white/10">⌨ Терминал</button>
+                <button onClick={() => setPromptCfg({ title: 'Коммит', label: 'Сообщение коммита', placeholder: 'chore: update', confirmLabel: 'Закоммитить', onSubmit: m => axios.post(API + '/api/projects/' + workspaceId + '/commit', { message: m }).then(() => { refreshTree(); axios.get<GitCommit[]>(API + '/api/projects/' + workspaceId + '/log').then(r => setLog(r.data)) }) })} className="w-full rounded-md bg-btnbg px-3 py-2 text-left text-[13px] text-fg transition hover:bg-white/10">Commit</button>
+                <button onClick={() => axios.post(API + '/api/projects/' + workspaceId + '/push')} className="w-full rounded-md bg-btnbg px-3 py-2 text-left text-[13px] text-fg transition hover:bg-white/10">Push</button>
               </div>
             </>
           )}
-
-          <div className="mt-auto flex items-center bg-accent px-3 py-[3px]">
-            <span className="text-[11px] text-white">● {isOverseer ? 'overseer' : (branches.current || 'main')}</span>
-            <span className="ml-auto text-[11px] text-white/70">ai-workspace</span>
-          </div>
         </div>
       </div>
 

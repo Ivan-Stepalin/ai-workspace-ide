@@ -66,8 +66,9 @@ const Node = memo(function Node({ node, depth, activeFile, onOpen, onCtxMenu }: 
       style={{ paddingLeft: pad }}
       className={
         'flex cursor-pointer select-none items-center py-[3px] pr-1 text-[13px] transition-colors ' +
-        (isActive ? 'bg-accentbg text-white' : 'text-fg hover:bg-white/5')
+        (isActive ? 'font-medium' : 'text-fg hover:bg-white/5')
       }
+      style={isActive ? { color: '#4fc3f7' } : undefined}
     >
       <FileIcon name={node.name} />
       <span className="overflow-hidden text-ellipsis whitespace-nowrap">{node.name}</span>
