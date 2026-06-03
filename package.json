@@ -10,7 +10,8 @@
     "start:backend": "npm --prefix backend start",
     "dev:backend": "npm --prefix backend run dev",
     "dev:frontend": "npm --prefix frontend run dev",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "record:scenarios": "npx ts-node --esm e2e/record-scenarios.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0"

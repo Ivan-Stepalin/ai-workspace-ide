@@ -22,6 +22,10 @@ data/
 test-results/
 playwright-report/
 e2e/__screens__/
+e2e/videos/
+
+# Бинарники внешних инструментов
+backend/bin/
 
 # Логи и системное
 *.log
