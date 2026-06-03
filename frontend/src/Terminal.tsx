@@ -167,6 +167,7 @@ function TerminalPanel({ projectId, agent, wsId, onFileSystemChange, active }: P
       <style>{`
         .xterm { height: 100% !important; padding: 0 !important; text-align: left; }
         .xterm-viewport { overflow-y: scroll !important; background-color: transparent !important; }
+        .xterm-screen { width: 100% !important; }
         .xterm-screen canvas { display: block; }
       `}</style>
       <div ref={containerRef} className="h-full w-full" />
