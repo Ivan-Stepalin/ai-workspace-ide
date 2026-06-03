@@ -42,7 +42,7 @@ function TerminalPanel({ projectId, agent, wsId, onFileSystemChange, active }: P
 
     const term = new XTerm({
       theme: {
-        background: '#1e1e1e', foreground: '#cccccc', cursor: '#0078d4',
+        background: '#0d0d0d', foreground: '#cccccc', cursor: '#0078d4',
         cursorAccent: '#1e1e1e', selectionBackground: '#094771',
         black: '#1e1e1e', red: '#f44747', green: '#4ec9b0',
         yellow: '#dcdcaa', blue: '#569cd6', magenta: '#c586c0',
