@@ -42,3 +42,18 @@ body {
 }
 
 *, *::before, *::after { box-sizing: border-box; }
+
+/* Reset форм-контролов (раньше его давал Tailwind preflight): без него кнопки без явного
+   background рисуются нативным светлым фоном браузера. */
+button, input, select, textarea {
+  font-family: inherit;
+  font-size: 100%;
+  color: inherit;
+}
+button {
+  background: transparent;
+  background-image: none;
+  border: none;
+  cursor: pointer;
+}
+button:disabled { cursor: default; }
