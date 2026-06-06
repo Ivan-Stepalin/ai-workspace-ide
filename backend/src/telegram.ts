@@ -9,9 +9,9 @@ import Database from 'better-sqlite3';
 import { listProjects, getProject, PROJECTS_DIR, DB_PATH } from './projects.js';
 import { PROMPTS } from './agents.js';
 
-const AGENTS = ['manager', 'coder', 'reviewer', 'overseer'] as const;
+const AGENTS = ['manager', 'overseer'] as const;
 const AGENT_LABELS: Record<string, string> = {
-  manager: 'Менеджер', coder: 'Кодер', reviewer: 'Ревьюер', overseer: 'Общий менеджер',
+  manager: 'Агент', overseer: 'Общий менеджер',
 };
 const TG_MAX = 4096; // лимит длины сообщения Telegram
 
@@ -178,7 +178,7 @@ export function initTelegramBot(): void {
     if (!guard(msg.chat.id)) return;
     bot!.sendMessage(msg.chat.id,
       'AI Workspace — агенты в Telegram.\n\n' +
-      '/agent — выбрать роль (Менеджер / Кодер / Ревьюер / Общий менеджер)\n' +
+      '/agent — выбрать роль (Агент / Общий менеджер)\n' +
       '/projects — выбрать проект\n' +
       '/status — текущая привязка\n' +
       '/reset — начать диалог заново (сбросить контекст)\n' +
