@@ -4,10 +4,10 @@
 //
 // Включается только если задан TELEGRAM_BOT_TOKEN. Транспорт — long polling (без публичного домена).
 import TelegramBot from 'node-telegram-bot-api';
-import { spawn, ChildProcess } from 'child_process';
+import { ChildProcess } from 'child_process';
 import Database from 'better-sqlite3';
 import { listProjects, getProject, PROJECTS_DIR, DB_PATH } from './projects.js';
-import { PROMPTS } from './agents.js';
+import { runClaude } from './agent-stream.js';
 
 const AGENTS = ['manager', 'overseer'] as const;
 const AGENT_LABELS: Record<string, string> = {
@@ -94,65 +94,28 @@ function runAgent(chatId: number, prompt: string): void {
   }
   if (running[chatId]) { bot!.sendMessage(chatId, '⏳ Агент ещё отвечает на прошлое сообщение. Дождись ответа или /cancel.'); return; }
 
-  const sys = (PROMPTS[s.agent] || PROMPTS.manager).replace(/{p}/g, cwd);
-  const args = ['-p', prompt, '--append-system-prompt', sys,
-    '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
-  if (s.session_id) args.push('--resume', s.session_id);
-
   bot!.sendChatAction(chatId, 'typing').catch(() => {});
   const typing = setInterval(() => bot!.sendChatAction(chatId, 'typing').catch(() => {}), 5000);
 
-  const proc = spawn('claude', args, { cwd, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
-  running[chatId] = proc;
-
-  let buf = '';        // буфер для сборки NDJSON-строк из чанков stdout
-  let finalText = '';  // финальный ответ из события result
+  let finalText = '';  // финальный ответ
   let errText = '';
-
-  proc.stdout.on('data', (d: Buffer) => {
-    buf += d.toString();
-    let nl: number;
-    while ((nl = buf.indexOf('\n')) !== -1) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (line) handleEvent(chatId, line, t => { finalText = t; });
-    }
-  });
-  proc.stderr.on('data', (d: Buffer) => { errText += d.toString(); });
-
-  proc.on('exit', code => {
-    clearInterval(typing);
-    delete running[chatId];
-    if (finalText) sendChunked(chatId, finalText);
-    else if (code !== 0) sendChunked(chatId, '⚠️ Агент завершился с ошибкой.\n' + (errText.slice(-1000) || ''));
-    else sendChunked(chatId, '(пустой ответ)');
-  });
-}
-
-// Разбор одного NDJSON-события stream-json. session_id сохраняем для --resume,
-// о вызовах инструментов уведомляем коротким сообщением, финальный текст отдаём в onResult.
-function handleEvent(chatId: number, line: string, onResult: (text: string) => void): void {
-  let ev: any;
-  try { ev = JSON.parse(line); } catch { return; }
-
-  if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id) {
-    const s = getState(chatId);
-    s.session_id = ev.session_id;
-    saveState(s);
-    return;
-  }
-  if (ev.type === 'assistant' && ev.message?.content) {
-    for (const block of ev.message.content) {
-      if (block.type === 'tool_use') {
-        const arg = block.input?.file_path || block.input?.path || block.input?.command || block.input?.pattern || '';
-        bot!.sendMessage(chatId, `🔧 ${block.name}${arg ? ' · ' + String(arg).slice(0, 120) : ''}`).catch(() => {});
+  const proc = runClaude({
+    cwd, prompt, agent: s.agent, sessionId: s.session_id,
+    onEvent: ev => {
+      if (ev.kind === 'init') { s.session_id = ev.sessionId; saveState(s); }
+      else if (ev.kind === 'tool') bot!.sendMessage(chatId, `🔧 ${ev.name}${ev.arg ? ' · ' + ev.arg.slice(0, 120) : ''}`).catch(() => {});
+      else if (ev.kind === 'assistant') finalText = ev.text;
+      else if (ev.kind === 'error') errText = ev.text;
+      else if (ev.kind === 'done') {
+        clearInterval(typing);
+        delete running[chatId];
+        if (finalText) sendChunked(chatId, finalText);
+        else if (ev.code !== 0) sendChunked(chatId, '⚠️ Агент завершился с ошибкой.\n' + (errText || ''));
+        else sendChunked(chatId, '(пустой ответ)');
       }
-    }
-    return;
-  }
-  if (ev.type === 'result' && typeof ev.result === 'string') {
-    onResult(ev.result);
-  }
+    },
+  });
+  running[chatId] = proc;
 }
 
 export function initTelegramBot(): void {

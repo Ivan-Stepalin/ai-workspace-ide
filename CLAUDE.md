@@ -4,7 +4,7 @@
 
 ## Что это
 
-**AI Workspace IDE** — браузерная IDE, которая управляет набором отдельных проектов. В каждом проекте: файловое дерево, Monaco-редактор, интегрированные PTY-терминалы, git, сессии агентов на базе `claude` CLI. Есть кросс-проектный «общий менеджер».
+**AI Workspace IDE** — браузерный **пульт управления агентами** над набором проектов. В каждом проекте: нативный **чат с агентом** на базе `claude` CLI (главный интерфейс), вспомогательные PTY-терминалы (`bash`), git (log / branches / commit / push). Кода в браузере **не редактируем и не просматриваем** — агент сам правит файлы в своей рабочей директории. Есть кросс-проектный «общий менеджер» (overseer).
 
 Монорепо из двух пакетов:
 
@@ -28,11 +28,11 @@ ai-workspace-ide/
 - Раздача: хэшированные ассеты (`/assets/*`) — `Cache-Control: immutable` на год; `index.html`/`sw.js` — `no-cache`; SPA-fallback на `index.html` для всех не-`/api/` GET.
 - Сборка оптимизирована под минимальный старт:
   - вендоры (`react`, `xterm`) — отдельные кэшируемые чанки (`manualChunks`);
-  - **Monaco забандлен локально** (`EditorLazy.tsx` + пакет `monaco-editor`, не CDN) — офлайн и быстрый старт; грузится lazy-чанком только при открытии файла, его языковые web-воркеры (`?worker`) — тоже отдельными чанками;
-  - **`TerminalPanel` (xterm) тоже lazy** — грузится при первом открытии терминала/агента, не на старте;
+  - **`ChatPanel` (react-markdown + highlight.js) — lazy** — грузится при открытии чата, не на старте (~100 КБ gzip);
+  - **`TerminalPanel` (xterm) тоже lazy** — грузится при первом открытии терминала, не на старте;
   - начальная загрузка = только `index` + `react` (~90 КБ gzip), всё тяжёлое отложено;
-  - `FileTree` и `TerminalPanel` обёрнуты в `memo` — ввод в редакторе (ререндер `App`) не дёргает дерево/живые терминалы. Чтобы memo работал, колбэки в них передаются стабильными по идентичности (`openFileStable` через ref, `refreshTree` напрямую).
-  - PWA precache крупный (~12 МБ: Monaco-воркеры) — осознанная плата за офлайн; лимит поднят (`maximumFileSizeToCacheInBytes`).
+  - `ChatPanel` и `TerminalPanel` обёрнуты в `memo` — ререндеры `App` не дёргают живые чаты/терминалы; пропсы сравниваются по идентичности.
+  - PWA precache ~1 МБ (после удаления Monaco) — оболочка для офлайн-старта.
 
 ⚠️ **Главное про разработку:**
 - Backend **запускается из скомпилированного `dist/`**, авто-перезагрузки нет. После любой правки в `backend/src/**` нужно `npm run build` (`tsc`) **и перезапустить** процесс — иначе изменения не применятся.
@@ -57,7 +57,7 @@ ai-workspace-ide/
 
 Код приложения (этот репозиторий) ≠ данные пользователя. Данные **не коммитятся** (`.gitignore`):
 - `PROJECTS_DIR` — папка с проектами; **каждый подкаталог автоматически становится проектом** (автообнаружение в `listProjects()`).
-- `workspace.db` — SQLite (better-sqlite3) с таблицей `projects`.
+- `workspace.db` — SQLite (better-sqlite3): таблицы `projects`, `chat_sessions` (session_id чатов для `--resume`), `tg_sessions` (привязки Telegram).
 
 Пути задаются через env (`backend/.env`, есть `.env.example`):
 - `DATA_DIR` (по умолчанию `./data`) → внутри `projects/` и `workspace.db`;
@@ -69,24 +69,33 @@ ai-workspace-ide/
 
 ## Backend (`backend/src/`)
 
-- `index.ts` — Express-роуты (`/api/projects/...`: список, создание, clone, delete, файлы, fs-операции, git log/branches/commit/push; `/api/workspaces/:wid/terminals` — список живых серверных сессий воркспейса для переподключения) + WebSocket-сервер (терминалы + агенты) + раздача прод-статики. Хелперы: `syncManagerSkills()` (навыки → `PROJECTS_DIR/.claude/skills`), `syncProjectsGuide()` (`backend/PROJECTS_CLAUDE.md` → `PROJECTS_DIR/CLAUDE.md`, правила запуска приложений проектов). Каждый `Term` хранит `workspaceId` (`projectId` или `'overseer'`) и `seq`.
-- `agents.ts` — только `PROMPTS`: ролевые системные промпты агентов. Сами агенты — это интерактивный `claude` в PTY (см. `terminal_create`), роль передаётся флагом `--append-system-prompt`. Отдельного chat-стриминга больше нет.
-- `projects.ts` — БД, `listProjects()` (+автообнаружение), `createProject`, `cloneRepo(url)`, `deleteProject(id)` (удаляет папку, потом запись), `getProject`. Экспортирует `PROJECTS_DIR`.
-- `git.ts` — обёртки simple-git + построение дерева файлов.
-- `telegram.ts` — опциональный Telegram-бот (long polling). Поднимается из `index.ts`, только если задан `TELEGRAM_BOT_TOKEN`. Те же роли (`PROMPTS`) и проекты, но агент запускается в **headless-режиме** (`claude -p --output-format stream-json --resume`), а не в PTY: чат привязывается к `{ projectId, agent, sessionId }` (таблица `tg_sessions` в `workspace.db`), контекст диалога держится через `--resume`. Команды (в т.ч. в меню бота через `setMyCommands`): `/agent`, `/projects`, `/status`, `/reset`, `/cancel`, `/help`.
+- `index.ts` — Express-роуты (`/api/projects/...`: список, создание, clone, delete, git log/branches/commit/push; `/api/workspaces/:wid/terminals` и `/api/workspaces/:wid/chats` — списки живых серверных сессий воркспейса для переподключения) + WebSocket-сервер (чаты + терминалы) + раздача прод-статики. Хелперы: `syncManagerSkills()` (навыки → `PROJECTS_DIR/.claude/skills`), `syncProjectsGuide()` (`backend/PROJECTS_CLAUDE.md` → `PROJECTS_DIR/CLAUDE.md`, правила запуска приложений проектов). Каждый `Term` хранит `workspaceId` (`projectId` или `'overseer'`) и `seq`.
+- `agents.ts` — только `PROMPTS`: ролевые системные промпты двух ролей (`manager` / `overseer`). Роль передаётся `claude` флагом `--append-system-prompt`.
+- `agent-stream.ts` — **общий раннер агента** в headless-режиме: `runClaude({cwd, prompt, agent, sessionId?, partial?, onEvent})` спавнит `claude -p ... --output-format stream-json` и отдаёт **нормализованные** события (`init` / `tool` / `delta` / `assistant` / `error` / `done`). Единая точка спавна и разбора NDJSON — переиспользуется и `chat.ts`, и `telegram.ts`.
+- `chat.ts` — серверные чат-сессии браузера (`Map<chatId, ChatSession>`, источник истины). WS-хендлеры `chat_create` / `chat_send` / `chat_cancel` / `chat_reset` / `chat_close`; история в памяти (для `chat_restore` при переподключении), `session_id` персистится в `chat_sessions` (`workspace.db`) ради `--resume` после рестарта. GC отвязанных сессий через `DETACH_GC_MS`=30 мин. `listChats(wid)` → `/api/workspaces/:wid/chats`.
+- `projects.ts` — БД, `listProjects()` (+автообнаружение), `createProject`, `cloneRepo(url)`, `deleteProject(id)` (удаляет папку, потом запись), `getProject`. Экспортирует `PROJECTS_DIR`, `DB_PATH`.
+- `git.ts` — обёртки simple-git (`getLog` / `getBranches` / `commitAll` / `pushRepo`) с кэшем.
+- `telegram.ts` — опциональный Telegram-бот (long polling). Поднимается из `index.ts`, только если задан `TELEGRAM_BOT_TOKEN`. Те же роли (`PROMPTS`) и проекты, агент запускается через общий `runClaude` (headless): чат привязан к `{ projectId, agent, sessionId }` (таблица `tg_sessions`), контекст — через `--resume`. Команды: `/agent`, `/projects`, `/status`, `/reset`, `/cancel`, `/help`.
 - `types.ts` — `WsMessage` и доменные типы.
 
 ### WebSocket-протокол
 
-Каждый терминал (и каждый агент — это тоже терминал) открывает **своё** WebSocket-соединение. Главное соединение `App.tsx` принимает только бродкасты.
+Каждый чат и каждый терминал открывает **своё** WebSocket-соединение. Главное соединение `App.tsx` принимает только бродкасты + шлёт `subscribe` / `*_close`.
 
-- `terminal_create` — создать PTY: `{ type:'terminal_create', projectId, agent?, cols, rows }`. Если `agent` задан — в PTY запускается интерактивный `claude` с ролью (`--append-system-prompt`) вместо `bash`; для overseer-воркспейса (`agent==='overseer'` или `projectId==='overseer'`) cwd = `PROJECTS_DIR`, иначе папка проекта. Если `terminalId` совпал с живой сессией — переподключение (буфер переотдаётся). Ответ `terminal_ready`.
+**Чат** (`chat.ts`):
+- `chat_create` — `{ type:'chat_create', chatId, projectId, agent }`. cwd: overseer → `PROJECTS_DIR`, иначе папка проекта. Ответ `chat_ready`; если сессия жива — плюс `chat_restore { messages }`.
+- `chat_send` — `{ chatId, text }`. Сервер спавнит `runClaude` (`--include-partial-messages` → токеновый стрим) и шлёт `chat_event { chatId, event }`, где `event` нормализован: `{kind:'tool',name,arg}` | `{kind:'delta',text}` | `{kind:'assistant',text}` (финал) | `{kind:'error',text}` | `{kind:'done'}`.
+- `chat_cancel` (прервать ответ) / `chat_reset` (новый диалог — сброс `--resume` + истории) / `chat_close` (закрыть сессию).
+
+**Терминал** (`bash` в PTY):
+- `terminal_create` — `{ projectId, agent?, cols, rows }`. cwd как у чата. Совпал `terminalId` с живой сессией → переподключение (буфер переотдаётся). Ответ `terminal_ready`.
 - `terminal_input` / `terminal_resize` → `terminal_data` / `terminal_exit` (по `terminalId`).
-- Бродкасты: `file_changed`, `tree_updated`, `projects_updated`.
+
+Бродкасты: `projects_updated`.
 
 ### Агенты и скиллы
 
-Агент = **интерактивный `claude` в PTY-терминале** (виден весь нативный процесс Claude Code: размышления, вызовы инструментов). Типы: `manager` / `coder` / `reviewer` — cwd = папка проекта; `overseer` («Общий менеджер») — cwd = `PROJECTS_DIR`, видит все проекты, сам код не правит, рекомендует открыть нужного агента, умеет клонировать репозитории. Роль задаётся ролевым системным промптом из `PROMPTS` (`agents.ts`).
+Две роли (`PROMPTS` в `agents.ts`): `manager` — инженер-агент проекта, сам пишет/правит код, коммитит, запускает тесты (cwd = папка проекта); `overseer` («Общий менеджер») — cwd = `PROJECTS_DIR`, видит все проекты, сам код не правит, рекомендует открыть агента, умеет клонировать репозитории. Старые ссылки на `coder`/`reviewer` безопасно сваливаются на `manager` (фолбэк в `runClaude`).
 
 Навыки лежат в `backend/skills/<name>/SKILL.md` (формат `.claude/skills`). При старте бэкенда `syncManagerSkills()` копирует их в `PROJECTS_DIR/.claude/skills/`, откуда их подхватывает `claude` у overseer (его cwd = `PROJECTS_DIR`). Новый навык = новая папка в `backend/skills/` + перезапуск бэкенда.
 
@@ -94,19 +103,20 @@ ai-workspace-ide/
 
 - `main.tsx` — точка входа и роутинг: читает `?p=` из URL. Есть `?p=<id>` → рендерит `App` (воркспейс), иначе → `ProjectPicker` (лаунчер). Никаких условных хуков в App.
 - `ProjectPicker.tsx` — лаунчер: список проектов (выбор → `?p=<id>` с перезагрузкой), создание нового проекта инлайном, «Добавить репозиторий», вход в общий менеджер (`?p=overseer`), удаление проекта. Каждый проект открывается в своей вкладке браузера.
-- `App.tsx` — оркестратор ОДНОГО воркспейса (проп `workspaceId`): состояние, главный WebSocket (бродкасты + `terminal_close`), API, раскладка (3 колонки). Для overseer-воркспейса левая панель (дерево/ветки) и git скрыты.
-- `Terminal.tsx` — xterm + FitAddon, своё WS-соединение; проп `agent` → запускает claude нужной роли. Обёрнут в `memo` (ререндеры App не трогают живые терминалы) и lazy-грузится.
-- `AddRepoModal.tsx` — добавление репозитория по URL. `ConfirmModal.tsx` — переиспользуемое подтверждение. `FileTree.tsx` — дерево файлов с контекстным меню (`memo`). `EditorLazy.tsx` — lazy-обёртка локального Monaco.
-- `theme.ts` — `agentColors` (цвета подтипов, инлайном), `AGENTS`, `agentLabel`, `OVERSEER`.
+- `App.tsx` — оркестратор ОДНОГО воркспейса (проп `workspaceId`): состояние, главный WebSocket (бродкасты + `chat_close`/`terminal_close`), API, раскладка (центр + правая панель действий/git). Текущая ветка — компактно в топбаре. Для overseer git-панель скрыта.
+- `ChatPanel.tsx` — **нативный чат с агентом** (основной интерфейс): своё WS-соединение, пузыри сообщений, markdown-рендер ответа (`react-markdown` + `remark-gfm` + `rehype-highlight`), чипы вызовов инструментов, токеновый стрим, кнопки «Стоп»/«Новый диалог», автоскролл. `memo` + lazy.
+- `Terminal.tsx` — xterm + FitAddon, своё WS-соединение (сырой `bash`). `memo` + lazy.
+- `AddRepoModal.tsx` — добавление репозитория по URL. `ConfirmModal.tsx` / `PromptModal.tsx` — переиспользуемые модалки.
+- `theme.ts` — `agentColors` (цвета ролей, инлайном), `AGENTS`, `agentLabel`, `OVERSEER`.
 - `config.ts` — `API` / `WS_URL` / `BACKEND_HOST`.
 
 ### Модель «один воркспейс = одна вкладка браузера»
 
 Каждая вкладка браузера работает ровно с одним воркспейсом, заданным в URL: `?p=<projectId>` или `?p=overseer`. Переключения проектов внутри страницы НЕТ — «другой проект» открывается в **новой вкладке браузера** (`window.open` на лаунчер). Старого верхнего бара проектов и `switchProject` больше нет.
 
-`tabs: Tab[]` (`Tab = agent | file | terminal`), все вкладки принадлежат текущему воркспейсу, `uid` — стабильный ключ, видна только активная (`activeUid`); **все вкладки смонтированы постоянно**, чтобы фоновые агенты/терминалы не выгружались.
+`tabs: Tab[]` (`Tab = chat | agent | terminal`; `chat` — нативный диалог, `agent` — legacy `claude` в PTY для переподключения к старым сессиям, `terminal` — сырой bash), все вкладки принадлежат текущему воркспейсу, `uid` — стабильный ключ, видна только активная (`activeUid`); **все вкладки смонтированы постоянно**, чтобы фоновые чаты/терминалы не выгружались.
 
-**Сессии терминалов/агентов — источник истины на СЕРВЕРЕ.** При открытии воркспейса `App` запрашивает `GET /api/workspaces/:wid/terminals` и переподключается ко всем живым PTY (по `wsId` = серверный id) — работает даже в свежей вкладке браузера с пустым localStorage. В localStorage (ключ `aiws.ws.<wid>`) персистятся **только файловые вкладки** + активная вкладка (`tabKey`); терминалы оттуда НЕ берутся. Закрытие вкладки шлёт `terminal_close` → PTY гасится сразу; разрыв WS без close → PTY живёт (GC через `DETACH_GC_MS`=30 мин).
+**Сессии чатов/терминалов — источник истины на СЕРВЕРЕ.** При открытии воркспейса `App` запрашивает `GET /api/workspaces/:wid/chats` и `.../terminals` и переподключается ко всем живым сессиям (по `wsId` = серверный id) — работает даже в свежей вкладке браузера с пустым localStorage. В localStorage (ключ `aiws.ws.<wid>`) персистится **только активная вкладка** (`tabKey`). Закрытие вкладки шлёт `chat_close`/`terminal_close` → сессия гасится сразу; разрыв WS без close → сессия живёт (GC через `DETACH_GC_MS`=30 мин).
 
 ### Стили — Tailwind CSS v4
 

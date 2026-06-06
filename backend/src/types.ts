@@ -36,4 +36,5 @@ export interface WsMessage {
   data?: string;
   cols?: number;
   rows?: number;
+  chatId?: string;
 }

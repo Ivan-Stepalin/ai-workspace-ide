@@ -7,16 +7,21 @@ import { agentColors, AGENTS, agentLabel, OVERSEER } from './theme'
 import { API, WS_URL } from './config'
 import { Project, GitCommit, GitBranches } from './types'
 
-// Тяжёлая панель — отдельным lazy-чанком (не на старте): терминал при открытии сессии
+// Тяжёлые панели — отдельными lazy-чанками (не на старте): чат с агентом и сырой терминал
+const ChatPanel = lazy(() => import('./ChatPanel'))
 const TerminalPanel = lazy(() => import('./Terminal'))
 
-// uid — стабильный ключ вкладки в рамках сессии; wsId — id серверной PTY-сессии (по нему фронт
-// переподключается к живому терминалу/агенту). Вся вкладка браузера = один воркспейс.
+// uid — стабильный ключ вкладки в рамках сессии; wsId — id серверной сессии (по нему фронт
+// переподключается к живому чату/терминалу). Вся вкладка браузера = один воркспейс.
+// chat — нативный диалог с агентом (основной интерфейс); agent — legacy claude в PTY
+// (переподключение к ранее открытым сессиям); terminal — сырой bash.
 type Tab =
+  | { uid: number; type: 'chat'; agentType: string; num: number; wsId: string }
   | { uid: number; type: 'agent'; agentType: string; num: number; wsId: string }
   | { uid: number; type: 'terminal'; num: number; wsId: string }
 
 type ServerTerm = { id: string; agent: string | null }
+type ServerChat = { id: string; agent: string }
 
 const newId = (): string =>
   (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)
@@ -25,7 +30,9 @@ const newId = (): string =>
 const tabKey = (t: Tab): string => 's:' + t.wsId
 
 function tabLabel(tab: Tab): string {
-  if (tab.type === 'agent') return tab.agentType === OVERSEER ? '🧭 Общий менеджер' : '🤖 ' + agentLabel(tab.agentType) + ' ' + tab.num
+  if (tab.type === 'chat' || tab.type === 'agent') {
+    return tab.agentType === OVERSEER ? '🧭 Общий менеджер' : '🤖 ' + agentLabel(tab.agentType) + ' ' + tab.num
+  }
   return '⌨ Терминал ' + tab.num
 }
 
@@ -77,9 +84,16 @@ export default function App({ workspaceId }: { workspaceId: string }) {
       })
     }
 
-    // 2. живые серверные сессии этого воркспейса → вкладки агентов/терминалов (переподключение по wsId)
-    axios.get<ServerTerm[]>(API + '/api/workspaces/' + workspaceId + '/terminals').then(r => {
-      const restored: Tab[] = r.data.map(st => {
+    // 2. живые серверные сессии этого воркспейса → вкладки чатов/терминалов (переподключение по wsId)
+    Promise.all([
+      axios.get<ServerChat[]>(API + '/api/workspaces/' + workspaceId + '/chats'),
+      axios.get<ServerTerm[]>(API + '/api/workspaces/' + workspaceId + '/terminals'),
+    ]).then(([chatsRes, termsRes]) => {
+      const chatTabs: Tab[] = chatsRes.data.map(sc => {
+        const num = agentNums.current[sc.agent] = (agentNums.current[sc.agent] || 0) + 1
+        return { uid: ++uidCounter.current, type: 'chat', agentType: sc.agent, num, wsId: sc.id }
+      })
+      const termTabs: Tab[] = termsRes.data.map(st => {
         if (st.agent) {
           const num = agentNums.current[st.agent] = (agentNums.current[st.agent] || 0) + 1
           return { uid: ++uidCounter.current, type: 'agent', agentType: st.agent, num, wsId: st.id }
@@ -87,6 +101,7 @@ export default function App({ workspaceId }: { workspaceId: string }) {
         const num = termCounter.current = termCounter.current + 1
         return { uid: ++uidCounter.current, type: 'terminal', num, wsId: st.id }
       })
+      const restored = [...chatTabs, ...termTabs]
       setTabs(restored)
       const act = restored.find(t => tabKey(t) === persisted.activeKey) || restored[0]
       setActiveUid(act ? act.uid : null)
@@ -121,18 +136,19 @@ export default function App({ workspaceId }: { workspaceId: string }) {
     setRightOpen(false)
     // общий менеджер — один на воркспейс: если уже открыт, просто активируем
     if (agentType === OVERSEER) {
-      const ex = tabs.find(t => t.type === 'agent' && t.agentType === OVERSEER)
+      const ex = tabs.find(t => t.type === 'chat' && t.agentType === OVERSEER)
       if (ex) { setActiveUid(ex.uid); return }
     }
     const num = agentNums.current[agentType] = (agentNums.current[agentType] || 0) + 1
-    pushTab({ type: 'agent', agentType, num, uid: ++uidCounter.current, wsId: newId() })
+    pushTab({ type: 'chat', agentType, num, uid: ++uidCounter.current, wsId: newId() })
   }
 
   function closeTab(uid: number, e: React.MouseEvent) {
     e.stopPropagation()
-    // закрытие вкладки = завершить серверную сессию (PTY гасим сразу, без ожидания GC)
+    // закрытие вкладки = завершить серверную сессию (гасим сразу, без ожидания GC)
     const tab = tabs.find(t => t.uid === uid)
-    if (tab) ws.current?.send(JSON.stringify({ type: 'terminal_close', terminalId: tab.wsId }))
+    if (tab?.type === 'chat') ws.current?.send(JSON.stringify({ type: 'chat_close', chatId: tab.wsId }))
+    else if (tab) ws.current?.send(JSON.stringify({ type: 'terminal_close', terminalId: tab.wsId }))
     setTabs(prev => prev.filter(t => t.uid !== uid))
     if (activeUid === uid) {
       const rest = tabs.filter(t => t.uid !== uid)
@@ -205,7 +221,20 @@ export default function App({ workspaceId }: { workspaceId: string }) {
               </div>
             )}
 
-            {/* Все вкладки смонтированы постоянно (фон не выгружается) — агенты/терминалы продолжают работать */}
+            {/* Все вкладки смонтированы постоянно (фон не выгружается) — чаты/агенты/терминалы продолжают работать */}
+            {tabs.map(tab => tab.type !== 'chat' ? null : (
+              <div key={tab.uid} className="absolute inset-0" style={{ display: activeUid === tab.uid ? 'block' : 'none' }}>
+                <Suspense fallback={<div className="flex h-full items-center justify-center text-dim">Загрузка чата…</div>}>
+                  <ChatPanel
+                    projectId={workspaceId}
+                    agent={tab.agentType}
+                    wsId={tab.wsId}
+                    active={activeUid === tab.uid}
+                  />
+                </Suspense>
+              </div>
+            ))}
+
             {tabs.map(tab => tab.type !== 'agent' ? null : (
               <div key={tab.uid} className="absolute inset-0 bg-terminal" style={{ display: activeUid === tab.uid ? 'block' : 'none' }}>
                 <Suspense fallback={<div className="flex h-full items-center justify-center text-dim">Загрузка терминала…</div>}>
