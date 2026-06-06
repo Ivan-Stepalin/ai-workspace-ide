@@ -4,11 +4,11 @@ import compression from 'compression';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'http';
 import cors from 'cors';
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, renameSync, cpSync } from 'fs';
+import { mkdirSync, existsSync, cpSync } from 'fs';
 import path from 'path';
 import * as pty from 'node-pty';
 import { PROMPTS } from './agents.js';
-import { getLog, getBranches, commitAll, pushRepo, getFiles, getFileTree, invalidateGitCache } from './git.js';
+import { getLog, getBranches, commitAll, pushRepo } from './git.js';
 import { listProjects, createProject, getProject, cloneRepo, deleteProject, PROJECTS_DIR } from './projects.js';
 import { initTelegramBot } from './telegram.js';
 import { WsMessage } from './types.js';
@@ -73,14 +73,6 @@ function broadcast(data: object): void {
   wss.clients.forEach(c => c.readyState === WebSocket.OPEN && c.send(msg));
 }
 
-// Broadcast только подписчикам конкретного воркспейса (tree_updated, file_changed).
-function broadcastToWorkspace(workspaceId: string, data: object): void {
-  const msg = JSON.stringify(data);
-  wss.clients.forEach(c => {
-    if (c.readyState === WebSocket.OPEN && wsSubscriptions.get(c) === workspaceId) c.send(msg);
-  });
-}
-
 function syncManagerSkills(): void {
   try {
     const src = path.resolve('skills');
@@ -120,74 +112,6 @@ app.delete('/api/projects/:id', (req, res) => {
 });
 app.get('/api/projects/:id/log', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json([]); res.json(await getLog(p.path)); });
 app.get('/api/projects/:id/branches', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json({ all: [], current: '' }); res.json(await getBranches(p.path)); });
-app.get('/api/projects/:id/files', (req, res) => { const p = getProject(req.params.id); if (!p) return res.json([]); res.json(getFiles(p.path)); });
-app.get('/api/projects/:id/tree', (req, res) => { const p = getProject(req.params.id); if (!p) return res.json([]); res.json(getFileTree(p.path)); });
-
-app.get('/api/projects/:id/file/*', (req, res) => {
-  const p = getProject(req.params.id);
-  if (!p) return res.status(404).json({ error: 'Not found' });
-  try {
-    const filename = (req.params as Record<string, string>)[0];
-    const content = readFileSync(path.join(p.path, filename), 'utf-8');
-    res.json({ content });
-  } catch { res.status(404).json({ error: 'File not found' }); }
-});
-
-app.post('/api/projects/:id/file/*', (req, res) => {
-  const p = getProject(req.params.id);
-  if (!p) return res.status(404).json({ error: 'Not found' });
-  try {
-    const filename = (req.params as Record<string, string>)[0];
-    writeFileSync(path.join(p.path, filename), req.body.content, 'utf-8');
-    invalidateGitCache(p.path);
-    res.json({ ok: true });
-  } catch { res.status(500).json({ error: 'Write failed' }); }
-});
-
-app.post('/api/projects/:id/fs/file', (req, res) => {
-  const p = getProject(req.params.id);
-  if (!p) return res.status(404).json({ error: 'Not found' });
-  try {
-    const filePath = path.join(p.path, req.body.path);
-    mkdirSync(path.dirname(filePath), { recursive: true });
-    writeFileSync(filePath, req.body.content || '', 'utf-8');
-    invalidateGitCache(p.path);
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: String(e) }); }
-});
-
-app.post('/api/projects/:id/fs/dir', (req, res) => {
-  const p = getProject(req.params.id);
-  if (!p) return res.status(404).json({ error: 'Not found' });
-  try {
-    mkdirSync(path.join(p.path, req.body.path), { recursive: true });
-    invalidateGitCache(p.path);
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: String(e) }); }
-});
-
-app.delete('/api/projects/:id/fs/*', (req, res) => {
-  const p = getProject(req.params.id);
-  if (!p) return res.status(404).json({ error: 'Not found' });
-  try {
-    const fsPath = path.join(p.path, (req.params as Record<string, string>)[0]);
-    if (existsSync(fsPath)) rmSync(fsPath, { recursive: true, force: true });
-    invalidateGitCache(p.path);
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: String(e) }); }
-});
-
-app.post('/api/projects/:id/fs/rename', (req, res) => {
-  const p = getProject(req.params.id);
-  if (!p) return res.status(404).json({ error: 'Not found' });
-  try {
-    const oldPath = path.join(p.path, req.body.oldPath);
-    const newPath = path.join(p.path, req.body.newPath);
-    renameSync(oldPath, newPath);
-    invalidateGitCache(p.path);
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: String(e) }); }
-});
 
 app.post('/api/projects/:id/commit', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json({ ok: false }); await commitAll(p.path, req.body.message || 'chore: update'); res.json({ ok: true }); });
 app.post('/api/projects/:id/push', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json({ ok: false }); await pushRepo(p.path); res.json({ ok: true }); });
@@ -213,7 +137,7 @@ wss.on('connection', ws => {
     try {
       const msg = JSON.parse(raw.toString()) as WsMessage;
 
-      // Подписка главного WS воркспейса — для получения scoped-бродкастов (tree_updated и т.п.).
+      // Подписка главного WS воркспейса — для получения scoped-бродкастов.
       if (msg.type === 'subscribe' && msg.workspaceId) {
         wsSubscriptions.set(ws, msg.workspaceId);
         return;
@@ -319,15 +243,6 @@ wss.on('connection', ws => {
 
       if (msg.type === 'terminal_close' && msg.terminalId) {
         killTerminal(msg.terminalId);
-        return;
-      }
-
-      if (msg.type === 'tree_refresh' && msg.projectId) {
-        const p = getProject(msg.projectId);
-        if (p) {
-          invalidateGitCache(p.path);
-          broadcastToWorkspace(msg.projectId, { type: 'tree_updated', projectId: msg.projectId, tree: getFileTree(p.path) });
-        }
         return;
       }
     } catch (e) {

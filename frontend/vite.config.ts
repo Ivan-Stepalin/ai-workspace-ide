@@ -25,12 +25,10 @@ export default defineConfig({
   build: {
     target: 'es2020',
     cssCodeSplit: true,
-    // Monaco-чанки (editor.api, ts.worker) большие, но грузятся лениво при открытии файла — не пугаемся
-    chunkSizeWarningLimit: 7000,
+    chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
         // вендоры в отдельные чанки: меняются редко → долго кэшируются, грузятся параллельно с app-кодом
-        // (Monaco грузится с CDN отдельно, @monaco-editor/react уезжает в свой lazy-чанк)
         manualChunks(id: string) {
           if (!id.includes('node_modules')) return
           if (id.includes('react-dom') || id.includes('/react/') || id.includes('scheduler')) return 'react'
@@ -48,7 +46,7 @@ export default defineConfig({
       manifest: {
         name: 'AI Workspace IDE',
         short_name: 'AI Workspace',
-        description: 'Браузерная IDE с агентами, терминалами, файловым деревом и git',
+        description: 'Браузерный пульт управления агентами: чат, терминалы и git',
         lang: 'ru',
         theme_color: '#1e1e1e',
         background_color: '#1e1e1e',
@@ -67,8 +65,6 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png,woff,woff2}'],
         navigateFallback: '/index.html',
         cleanupOutdatedCaches: true,
-        // Monaco забандлен локально: его воркеры (ts.worker ~6 МБ) должны попасть в precache ради офлайна
-        maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
       },
       devOptions: { enabled: true },
     }),
