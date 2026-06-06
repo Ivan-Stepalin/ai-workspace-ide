@@ -85,8 +85,11 @@
   border-radius: 8px;
   border: 1px solid var(--color-edge);
   background: var(--color-app);
-  padding: 8px 12px;
+  /* line-height 20 + padding 10*2 = 40px → одна строка совпадает по высоте с селектом/кнопками,
+     placeholder вертикально по центру */
+  padding: 10px 12px;
   font-size: 13px;
+  line-height: 20px;
   color: var(--color-fg);
   outline: none;
   transition: border-color 0.15s;
@@ -94,9 +97,9 @@
 .textarea::placeholder { color: var(--color-dim); }
 .textarea:focus { border-color: var(--color-accent); }
 .textarea:disabled { opacity: 0.5; }
-.stopBtn { border-radius: 8px; border: 1px solid var(--color-edge); background: var(--color-app); padding: 8px 16px; font-size: 13px; color: var(--color-fg); cursor: pointer; transition: background 0.15s; }
+.stopBtn { flex-shrink: 0; height: 40px; border-radius: 8px; border: 1px solid var(--color-edge); background: var(--color-app); padding: 0 16px; font-size: 13px; color: var(--color-fg); cursor: pointer; transition: background 0.15s; }
 .stopBtn:hover { background: rgba(255, 255, 255, 0.05); }
-.sendBtn { border-radius: 8px; border: none; background: var(--color-accent); padding: 8px 16px; font-size: 13px; color: #fff; cursor: pointer; transition: filter 0.15s; }
+.sendBtn { flex-shrink: 0; height: 40px; border-radius: 8px; border: none; background: var(--color-accent); padding: 0 16px; font-size: 13px; color: #fff; cursor: pointer; transition: filter 0.15s; }
 .sendBtn:hover { filter: brightness(1.1); }
 .sendBtn:disabled { opacity: 0.4; cursor: not-allowed; }
 
