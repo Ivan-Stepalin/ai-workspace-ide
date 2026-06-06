@@ -1,7 +1,7 @@
 import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import axios from 'axios'
-import './index.css'
+import './theme.css'
 import App from './App.tsx'
 import ProjectPicker from './ProjectPicker.tsx'
 import Login from './Login.tsx'
@@ -20,7 +20,7 @@ function Root() {
 
   useEffect(() => { fetchMe().then(u => { setUser(u); setLoading(false) }) }, [])
 
-  if (loading) return <div className="flex h-screen items-center justify-center bg-app text-sm text-dim">Загрузка…</div>
+  if (loading) return <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center', fontSize: 14, color: 'var(--color-dim)' }}>Загрузка…</div>
   if (!user) return <Login onLogin={setUser} />
   return workspaceId ? <App workspaceId={workspaceId} user={user} /> : <ProjectPicker user={user} />
 }

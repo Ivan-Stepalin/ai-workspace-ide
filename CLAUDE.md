@@ -132,12 +132,12 @@ ai-workspace-ide/
 
 **Сессии чатов/терминалов — источник истины на СЕРВЕРЕ.** При открытии воркспейса `App` запрашивает `GET /api/workspaces/:wid/chats` и `.../terminals` и переподключается ко всем живым сессиям (по `wsId` = серверный id) — работает даже в свежей вкладке браузера с пустым localStorage. В localStorage (ключ `aiws.ws.<wid>`) персистится **только активная вкладка** (`tabKey`). Закрытие вкладки шлёт `chat_close`/`terminal_close` → сессия гасится сразу; разрыв WS без close → сессия живёт (GC через `DETACH_GC_MS`=30 мин).
 
-### Стили — Tailwind CSS v4
+### Стили — CSS Modules
 
-- `index.css`: `@import "tailwindcss"` + блок `@theme` с дизайн-токенами палитры (`--color-app`, `--color-sidebar`, `--color-edge`, `--color-accent`, `--color-fg`, `--color-muted`, `--color-mint`, …). Из них Tailwind генерирует утилиты: `bg-app`, `text-fg`, `border-edge`, `text-accent` и т.д.
-- Подключён через `@tailwindcss/vite` (CSS-first, без `tailwind.config.js`).
-- **Конвенция:** статичные стили — утилитами Tailwind с этими токенами; **динамические цвета** (по `agentColors`, точки статуса, индикатор сервера) — инлайн `style={{...}}`, т.к. значения приходят из JS.
-- Освежение: скругления, мягкие тени, `transition`, фокус-кольца, `backdrop-blur` у модалок. Тёмная VS Code-подобная тема.
+- `theme.css` — палитра тёмной IDE обычными CSS-переменными в `:root` (`--color-app`, `--color-sidebar`, `--color-edge`, `--color-accent`, `--color-fg`, `--color-muted`, …) + базовый reset (`body`/`#root`). Импортируется в `main.tsx`. Tailwind удалён.
+- На каждый компонент — свой `*.module.css` со скоупленными семантическими классами (`s.topbar`, `s.tab`, `s.bubble`). Модалки делят общий `modal.module.css`. Адаптив (выезжающая правая панель, скрытие на десктопе) — `@media (min-width: 1024px)` внутри `App.module.css`.
+- **Конвенция:** статичные стили — классы модуля через `s.<class>`; условные — `clsx(s.a, cond && s.b)`; **динамические цвета** (по `agentColors`, точки статуса) — инлайн `style={{...}}`, значения берут `var(--color-…)` из `theme.css`.
+- Освежение: скругления, мягкие тени, `transition`, фокус через `:focus { border-color: accent }`, `backdrop-filter: blur` у модалок. Тёмная VS Code-подобная тема.
 
 ## Внешние требования
 

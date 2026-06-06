@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import clsx from 'clsx'
+import s from './modal.module.css'
 
 export interface PromptConfig {
   title: string
@@ -36,30 +38,25 @@ export default function PromptModal({ config, onClose }: Props) {
   }
 
   return (
-    <div onMouseDown={onClose} className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/55 backdrop-blur-sm">
-      <div
-        onMouseDown={e => e.stopPropagation()}
-        className="w-[440px] max-w-[90vw] overflow-hidden rounded-xl border border-edge bg-sidebar text-fg shadow-2xl shadow-black/50"
-      >
-        <div className="border-b border-edge px-4 py-3 text-sm font-semibold">{config.title}</div>
-        <div className="flex flex-col gap-2 p-4">
-          {config.label && <label className="text-xs text-muted">{config.label}</label>}
-          <input
-            autoFocus
-            value={value}
-            onChange={e => setValue(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') submit() }}
-            placeholder={config.placeholder}
-            className="rounded-md border border-edge bg-field px-2.5 py-2 text-[13px] text-fg outline-none transition focus:border-accent"
-          />
+    <div onMouseDown={onClose} className={s.overlay}>
+      <div onMouseDown={e => e.stopPropagation()} className={s.panel} style={{ width: 440 }}>
+        <div className={s.header}>{config.title}</div>
+        <div className={s.body}>
+          <div className={s.fields}>
+            {config.label && <label className={s.label}>{config.label}</label>}
+            <input
+              autoFocus
+              value={value}
+              onChange={e => setValue(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') submit() }}
+              placeholder={config.placeholder}
+              className={s.field}
+            />
+          </div>
         </div>
-        <div className="flex items-center gap-2.5 border-t border-edge bg-app px-4 py-3">
-          <button onClick={onClose} className="ml-auto rounded-md border border-edge px-3.5 py-1.5 text-[13px] text-fg transition hover:bg-white/5">Отмена</button>
-          <button
-            onClick={submit}
-            disabled={!value.trim()}
-            className="rounded-md border border-accent bg-accentbg px-4 py-1.5 text-[13px] text-white transition hover:brightness-125 disabled:cursor-not-allowed disabled:border-edge disabled:bg-field disabled:text-muted"
-          >{config.confirmLabel || 'OK'}</button>
+        <div className={s.footer}>
+          <button onClick={onClose} className={clsx(s.btn, s['ml-auto'])}>Отмена</button>
+          <button onClick={submit} disabled={!value.trim()} className={clsx(s.btn, s.btnPrimary)}>{config.confirmLabel || 'OK'}</button>
         </div>
       </div>
     </div>

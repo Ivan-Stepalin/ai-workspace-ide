@@ -1,4 +1,6 @@
 import { useEffect } from 'react'
+import clsx from 'clsx'
+import s from './modal.module.css'
 
 interface Props {
   open: boolean
@@ -22,39 +24,25 @@ export default function ConfirmModal({ open, title, message, confirmLabel = 'П�
 
   if (!open) return null
 
-  const confirmCls = danger
-    ? 'border-danger bg-danger/15 text-[#f48771] hover:bg-danger/25'
-    : 'border-accent bg-accentbg text-white hover:brightness-125'
-
   return (
-    <div
-      onMouseDown={() => { if (!loading) onClose() }}
-      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/55 backdrop-blur-sm"
-    >
-      <div
-        onMouseDown={e => e.stopPropagation()}
-        className="w-[420px] max-w-[90vw] overflow-hidden rounded-xl border border-edge bg-sidebar text-fg shadow-2xl shadow-black/50"
-      >
-        <div className="border-b border-edge px-4 py-3 text-sm font-semibold">{title}</div>
-        <div className="px-4 py-4 text-[13px] leading-relaxed text-fg whitespace-pre-wrap">{message}</div>
-        <div className="flex items-center gap-2.5 border-t border-edge bg-app px-4 py-3">
+    <div onMouseDown={() => { if (!loading) onClose() }} className={s.overlay}>
+      <div onMouseDown={e => e.stopPropagation()} className={s.panel} style={{ width: 420 }}>
+        <div className={s.header}>{title}</div>
+        <div className={clsx(s.body, s.bodyPre)}>{message}</div>
+        <div className={s.footer}>
           {loading && (
-            <span className="flex items-center gap-2 text-xs text-muted">
-              <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-edge border-t-accent" />
+            <span className={s.spinnerWrap}>
+              <span className={s.spinner} />
               Удаление…
             </span>
           )}
           {!hideCancel && (
-            <button
-              onClick={() => { if (!loading) onClose() }}
-              disabled={loading}
-              className="ml-auto rounded-md border border-edge px-3.5 py-1.5 text-[13px] text-fg transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-            >Отмена</button>
+            <button onClick={() => { if (!loading) onClose() }} disabled={loading} className={clsx(s.btn, s['ml-auto'])}>Отмена</button>
           )}
           <button
             onClick={onConfirm}
             disabled={loading}
-            className={'rounded-md border px-4 py-1.5 text-[13px] transition disabled:cursor-not-allowed disabled:opacity-50 ' + (hideCancel ? 'ml-auto ' : '') + confirmCls}
+            className={clsx(s.btn, danger ? s.btnDanger : s.btnPrimary, hideCancel && s['ml-auto'])}
           >{confirmLabel}</button>
         </div>
       </div>

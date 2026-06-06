@@ -1,5 +1,5 @@
 // Цвета подтипов агентов используются динамически в JS (подпись/чип/точка статуса).
-// Остальная палитра вынесена в дизайн-токены Tailwind (src/index.css @theme).
+// Остальная палитра — CSS-переменные в src/theme.css (:root).
 export const agentColors: Record<string, string> = { manager: '#569cd6', overseer: '#c586c0' }
 
 export const OVERSEER = 'overseer'

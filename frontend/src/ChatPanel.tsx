@@ -3,9 +3,11 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import 'highlight.js/styles/github-dark.css'
+import clsx from 'clsx'
 import { WS_URL } from './config'
 import { agentColors, agentLabel, OVERSEER } from './theme'
 import { can, Role as UserRole, Action } from './auth'
+import s from './ChatPanel.module.css'
 
 interface Props {
   projectId: string
@@ -46,8 +48,8 @@ function Pre({ children }: { children?: React.ReactNode }) {
     navigator.clipboard?.writeText(t).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200) }).catch(() => {})
   }
   return (
-    <div className="group relative">
-      <button onClick={copy} className="absolute right-2 top-2 z-10 rounded border border-edge bg-app/80 px-2 py-0.5 text-[11px] text-muted opacity-0 transition-opacity hover:text-fg group-hover:opacity-100">
+    <div className={s.codeWrap}>
+      <button onClick={copy} className={s.copyBtn}>
         {copied ? '✓ скопировано' : 'копировать'}
       </button>
       <pre ref={ref}>{children}</pre>
@@ -153,52 +155,47 @@ function ChatPanel({ projectId, agent, wsId, role, active }: Props) {
   const streamingNow = busy && !messages.some(m => m.streaming)
 
   return (
-    <div className="flex h-full w-full flex-col bg-app">
+    <div className={s.container}>
       <style>{chatStyles}</style>
 
       {/* Шапка чата */}
-      <div className="flex flex-shrink-0 items-center gap-2 border-b border-edge bg-sidebar px-4 py-2">
-        <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
-        <span className="text-[13px] font-medium text-fg">{label}</span>
-        <button onClick={reset} title="Сбросить контекст диалога" className="ml-auto rounded border border-edge px-2 py-0.5 text-[12px] text-muted transition-colors hover:bg-white/5 hover:text-fg">Новый диалог</button>
+      <div className={s.header}>
+        <span className={s.dot} style={{ backgroundColor: color }} />
+        <span className={s.headerLabel}>{label}</span>
+        <button onClick={reset} title="Сбросить контекст диалога" className={s.resetBtn}>Новый диалог</button>
       </div>
 
       {/* Лента сообщений */}
-      <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+      <div ref={scrollRef} className={s.scroll}>
         {messages.length === 0 && (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-dim">
-            <div className="text-[28px]">{isOverseer ? '🧭' : '🤖'}</div>
-            <div className="text-sm">{ready ? 'Напиши агенту, что нужно сделать' : 'Подключение…'}</div>
+          <div className={s.empty}>
+            <div className={s.emptyIcon}>{isOverseer ? '🧭' : '🤖'}</div>
+            <div>{ready ? 'Напиши агенту, что нужно сделать' : 'Подключение…'}</div>
           </div>
         )}
 
         {messages.map((m, i) => {
           if (m.role === 'tool') {
             return (
-              <div key={i} className="flex items-center gap-2 px-1 font-mono text-[11px] text-dim">
+              <div key={i} className={s.toolRow}>
                 <span>🔧</span>
-                <span className="text-muted">{m.name}</span>
-                {m.text && <span className="truncate">· {m.text}</span>}
+                <span className={s.toolName}>{m.name}</span>
+                {m.text && <span className={s.toolArg}>· {m.text}</span>}
               </div>
             )
           }
           const mine = m.role === 'user'
           return (
-            <div key={i} className={'flex ' + (mine ? 'justify-end' : 'justify-start')}>
-              <div
-                className={
-                  'max-w-[85%] rounded-2xl px-3.5 py-2 text-[13px] leading-relaxed ' +
-                  (mine ? 'bg-accent text-white' : 'border border-edge bg-sidebar text-fg')
-                }
-              >
+            <div key={i} className={clsx(s.row, mine ? s.rowMine : s.rowOther)}>
+              <div className={clsx(s.bubble, mine ? s.bubbleMine : s.bubbleOther)}>
                 {mine ? (
-                  <span className="whitespace-pre-wrap break-words">{m.text}</span>
+                  <span className={s.userText}>{m.text}</span>
                 ) : (
-                  <div className="chat-md break-words">
+                  <div className={clsx('chat-md', s.mdWrap)}>
                     <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={{ pre: Pre }}>
                       {m.text}
                     </ReactMarkdown>
-                    {m.streaming && <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-current align-middle" />}
+                    {m.streaming && <span className={s.cursor} />}
                   </div>
                 )}
               </div>
@@ -207,23 +204,21 @@ function ChatPanel({ projectId, agent, wsId, role, active }: Props) {
         })}
 
         {streamingNow && (
-          <div className="flex justify-start">
-            <div className="rounded-2xl border border-edge bg-sidebar px-3.5 py-2 text-[13px] text-muted">
-              агент печатает<span className="animate-pulse">…</span>
-            </div>
+          <div className={clsx(s.row, s.rowOther)}>
+            <div className={s.typing}>агент печатает…</div>
           </div>
         )}
       </div>
 
       {/* Поле ввода */}
-      <div className="flex flex-shrink-0 items-end gap-2 border-t border-edge bg-sidebar px-3 py-2.5">
+      <div className={s.inputBar}>
         {cmds.length > 0 && (
           <select
             value=""
             onChange={e => { runCommand(e.target.value); e.currentTarget.value = '' }}
             disabled={!ready || busy}
             title="Стандартные команды"
-            className="h-[40px] flex-shrink-0 rounded-lg border border-edge bg-app px-2 text-[12px] text-muted outline-none transition-colors hover:text-fg focus:border-accent disabled:opacity-50"
+            className={s.select}
           >
             <option value="" disabled>⚙ Команды</option>
             {cmds.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
@@ -237,12 +232,12 @@ function ChatPanel({ projectId, agent, wsId, role, active }: Props) {
           rows={1}
           placeholder={ready ? 'Сообщение агенту…  (Enter — отправить, Shift+Enter — перенос)' : 'Подключение…'}
           disabled={!ready}
-          className="max-h-40 min-h-[40px] flex-1 resize-none rounded-lg border border-edge bg-app px-3 py-2 text-[13px] text-fg outline-none transition-colors placeholder:text-dim focus:border-accent disabled:opacity-50"
+          className={s.textarea}
         />
         {busy ? (
-          <button onClick={stop} className="rounded-lg border border-edge bg-app px-4 py-2 text-[13px] text-fg transition hover:bg-white/5">Стоп</button>
+          <button onClick={stop} className={s.stopBtn}>Стоп</button>
         ) : (
-          <button onClick={() => submit()} disabled={!ready || !input.trim()} className="rounded-lg bg-accent px-4 py-2 text-[13px] text-white transition hover:brightness-110 disabled:opacity-40">Отправить</button>
+          <button onClick={() => submit()} disabled={!ready || !input.trim()} className={s.sendBtn}>Отправить</button>
         )}
       </div>
     </div>

@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { WS_URL } from './config'
+import s from './Terminal.module.css'
 
 interface Props {
   projectId: string
@@ -162,15 +163,15 @@ function TerminalPanel({ projectId, agent, wsId, onFileSystemChange, active }: P
   }, [active])
 
   return (
-    <div className="h-full w-full overflow-hidden bg-terminal">
-      {/* xterm рисует свой внутренний DOM — стилизуем его обычным CSS, Tailwind тут не подходит */}
+    <div className={s.wrap}>
+      {/* xterm рисует свой внутренний DOM — стилизуем его обычным CSS */}
       <style>{`
         .xterm { height: 100% !important; padding: 0 !important; text-align: left; }
         .xterm-viewport { overflow-y: scroll !important; background-color: transparent !important; }
         .xterm-screen { width: 100% !important; }
         .xterm-screen canvas { display: block; }
       `}</style>
-      <div ref={containerRef} className="h-full w-full" />
+      <div ref={containerRef} className={s.inner} />
     </div>
   )
 }

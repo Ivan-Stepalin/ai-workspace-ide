@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { login, User } from './auth'
+import s from './Login.module.css'
 
 // Форма входа. Показывается, когда нет активной сессии (GET /me вернул 401).
 export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
@@ -21,31 +22,22 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-app px-4 text-fg">
-      <form onSubmit={submit} className="w-full max-w-sm rounded-2xl border border-edge bg-sidebar p-6 shadow-2xl shadow-black/40">
-        <div className="mb-5 flex items-center gap-2.5">
-          <span className="text-2xl">🤖</span>
-          <h1 className="text-lg font-semibold">AI Workspace</h1>
+    <div className={s.screen}>
+      <form onSubmit={submit} className={s.card}>
+        <div className={s.brand}>
+          <span className={s.brandIcon}>🤖</span>
+          <h1 className={s.brandTitle}>AI Workspace</h1>
         </div>
 
-        <label className="mb-1 block text-[12px] text-muted">Логин</label>
-        <input
-          autoFocus value={username} onChange={e => setUsername(e.target.value)}
-          className="mb-3 w-full rounded-lg border border-edge bg-field px-3 py-2 text-[13px] text-fg outline-none transition focus:border-accent"
-        />
+        <label className={s.label}>Логин</label>
+        <input autoFocus value={username} onChange={e => setUsername(e.target.value)} className={s.input} />
 
-        <label className="mb-1 block text-[12px] text-muted">Пароль</label>
-        <input
-          type="password" value={password} onChange={e => setPassword(e.target.value)}
-          className="mb-4 w-full rounded-lg border border-edge bg-field px-3 py-2 text-[13px] text-fg outline-none transition focus:border-accent"
-        />
+        <label className={s.label}>Пароль</label>
+        <input type="password" value={password} onChange={e => setPassword(e.target.value)} className={s.input} />
 
-        {err && <div className="mb-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-[12px] text-red-300">{err}</div>}
+        {err && <div className={s.error}>{err}</div>}
 
-        <button
-          type="submit" disabled={busy || !username.trim() || !password}
-          className="w-full rounded-lg bg-accent px-4 py-2 text-[13px] text-white transition hover:brightness-110 disabled:opacity-50"
-        >{busy ? 'Вход…' : 'Войти'}</button>
+        <button type="submit" disabled={busy || !username.trim() || !password} className={s.submit}>{busy ? 'Вход…' : 'Войти'}</button>
       </form>
     </div>
   )

@@ -1,0 +1,111 @@
+.screen {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-app);
+  color: var(--color-fg);
+  padding: 40px 16px;
+}
+.wrap { width: 100%; max-width: 42rem; }
+
+.head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.headIcon { font-size: 24px; }
+.title { font-size: 20px; font-weight: 600; }
+.user { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--color-muted); }
+.userName { color: var(--color-fg); }
+.roleTag { border-radius: 4px; background: rgba(255, 255, 255, 0.05); padding: 2px 6px; font-size: 11px; }
+.logout { border-radius: 4px; border: 1px solid var(--color-edge); padding: 2px 8px; color: var(--color-muted); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.logout:hover { background: rgba(255, 255, 255, 0.05); color: var(--color-fg); }
+
+.subtitle { margin-bottom: 24px; font-size: 14px; color: var(--color-muted); }
+
+.overseer {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  border-radius: 12px;
+  border: 1px solid var(--color-edge);
+  background: var(--color-sidebar);
+  padding: 12px 16px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.overseer:hover { background: rgba(255, 255, 255, 0.05); }
+.overseerIcon { font-size: 20px; }
+.overseerTitle { font-size: 14px; font-weight: 500; }
+.overseerSub { font-size: 12px; color: var(--color-muted); }
+
+.sectionRow { margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; }
+.sectionLabel { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: var(--color-muted); }
+.actions { display: flex; gap: 8px; }
+.btnGhost { border-radius: 6px; border: 1px solid var(--color-edge); padding: 4px 10px; font-size: 12px; color: var(--color-muted); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.btnGhost:hover { background: rgba(255, 255, 255, 0.05); color: var(--color-fg); }
+.btnAccent { border-radius: 6px; border: 1px solid var(--color-accent); background: var(--color-accentbg); padding: 4px 10px; font-size: 12px; color: #fff; cursor: pointer; transition: filter 0.15s; }
+.btnAccent:hover { filter: brightness(1.25); }
+
+.createRow {
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--color-edge);
+  background: var(--color-sidebar);
+  padding: 8px;
+}
+.createInput {
+  flex: 1;
+  border-radius: 6px;
+  border: 1px solid var(--color-edge);
+  background: var(--color-field);
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--color-fg);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.createInput:focus { border-color: var(--color-accent); }
+.createBtn { border-radius: 6px; border: 1px solid var(--color-accent); background: var(--color-accentbg); padding: 6px 12px; font-size: 12px; color: #fff; cursor: pointer; transition: filter 0.15s; }
+.createBtn:hover { filter: brightness(1.25); }
+.createBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+@media (min-width: 640px) { .grid { grid-template-columns: 1fr 1fr; } }
+.empty { grid-column: 1 / -1; padding: 24px 0; text-align: center; font-size: 14px; color: var(--color-dim); }
+
+.card {
+  position: relative;
+  display: flex;
+  cursor: pointer;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border-radius: 8px;
+  border: 1px solid var(--color-edge);
+  background: var(--color-sidebar);
+  padding: 12px 16px;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+.card:hover { border-color: var(--color-accent); background: rgba(255, 255, 255, 0.05); }
+.cardName { padding-right: 24px; font-size: 14px; font-weight: 500; }
+.cardPath { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--color-dim); }
+.del {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  border-radius: 4px;
+  padding: 0 6px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--color-dim);
+  opacity: 0;
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
+}
+.card:hover .del { opacity: 1; }
+.del:hover { background: rgba(255, 255, 255, 0.1); color: var(--color-fg); }

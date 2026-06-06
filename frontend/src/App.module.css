@@ -1,0 +1,104 @@
+.app { display: flex; height: 100vh; flex-direction: column; background: var(--color-app); font-size: 13px; color: var(--color-fg); }
+
+/* ── Топбар ── */
+.topbar { display: flex; height: 44px; flex-shrink: 0; align-items: center; border-bottom: 1px solid var(--color-edge); background: var(--color-topbar); padding: 0 16px; }
+.brand { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; color: var(--color-cyan); }
+.launchBtn { margin-left: 12px; border-radius: 4px; border: 1px solid var(--color-edge); padding: 2px 8px; font-size: 12px; color: var(--color-muted); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.launchBtn:hover { background: rgba(255, 255, 255, 0.05); color: var(--color-fg); }
+.topRight { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-muted); }
+.branch { display: flex; align-items: center; gap: 4px; border-radius: 4px; border: 1px solid var(--color-edge); padding: 2px 8px; font-size: 12px; color: var(--color-cyan); }
+.branchIcon { font-size: 9px; }
+.userBox { display: none; align-items: center; gap: 6px; border-left: 1px solid var(--color-edge); padding-left: 8px; }
+.userName { color: var(--color-fg); }
+.roleTag { border-radius: 4px; background: rgba(255, 255, 255, 0.05); padding: 2px 6px; font-size: 11px; }
+.logoutBtn { border-radius: 4px; padding: 0 6px; color: var(--color-muted); cursor: pointer; transition: color 0.15s; }
+.logoutBtn:hover { color: var(--color-fg); }
+.menuBtn { margin-left: 12px; border-radius: 4px; padding: 4px 6px; font-size: 16px; line-height: 1; color: var(--color-muted); cursor: pointer; transition: color 0.15s; }
+.menuBtn:hover { color: var(--color-fg); }
+
+.body { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Затемнение под выехавшей панелью (мобилка) ── */
+.scrim { position: fixed; left: 0; right: 0; bottom: 0; top: 44px; z-index: 30; background: rgba(0, 0, 0, 0.5); transition: opacity 0.2s; }
+.scrimOpen { opacity: 1; }
+.scrimClosed { pointer-events: none; opacity: 0; }
+
+/* ── Центр: вкладки + контент ── */
+.center { display: flex; flex: 1; flex-direction: column; overflow: hidden; }
+.tabsBar { display: flex; height: 44px; flex-shrink: 0; align-items: center; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--color-edge); background: var(--color-sidebar); padding: 0 8px; }
+.tab { display: flex; height: 28px; flex-shrink: 0; cursor: pointer; user-select: none; align-items: center; gap: 6px; border-radius: 6px; padding: 0 12px; font-size: 13px; color: var(--color-muted); transition: background 0.15s, color 0.15s; }
+.tab:hover { background: rgba(255, 255, 255, 0.05); color: var(--color-fg); }
+.tabActive { background: var(--color-accent); color: #fff; }
+.tabActive:hover { background: var(--color-accent); color: #fff; }
+.tabClose { margin-left: 2px; font-size: 16px; line-height: 1; opacity: 0.5; transition: opacity 0.15s; }
+.tabClose:hover { opacity: 1; }
+
+.content { position: relative; flex: 1; overflow: hidden; }
+.empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--color-dim); }
+.emptyIcon { font-size: 28px; }
+.pane { position: absolute; inset: 0; }
+.paneTerminal { position: absolute; inset: 0; background: var(--color-terminal); }
+.loading { display: flex; height: 100%; align-items: center; justify-content: center; color: var(--color-dim); }
+
+/* ── Правая панель: git + действия ── */
+.right {
+  position: fixed;
+  bottom: 0;
+  right: 0;
+  top: 44px;
+  z-index: 40;
+  display: flex;
+  width: 86vw;
+  max-width: 340px;
+  flex-direction: column;
+  overflow-y: auto;
+  border-left: 1px solid var(--color-edge);
+  background: var(--color-sidebar);
+  transition: transform 0.2s;
+  transform: translateX(100%);
+}
+.right > * { flex-shrink: 0; }
+.rightOpen { transform: translateX(0); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); }
+
+.rightHeader { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--color-edge); padding: 8px 12px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: var(--color-muted); }
+.closeBtn { border-radius: 4px; padding: 0 6px; font-size: 18px; line-height: 1; color: var(--color-muted); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.closeBtn:hover { background: rgba(255, 255, 255, 0.1); color: var(--color-fg); }
+
+.sectionHead { border-bottom: 1px solid var(--color-edge); padding: 8px 12px; font-size: 10px; font-weight: 700; letter-spacing: 0.1em; color: var(--color-muted); }
+.gitLog { max-height: 200px; overflow-y: auto; padding: 8px 12px; }
+.gitEmpty { padding: 4px 0; font-size: 12px; color: var(--color-dim); }
+.gitItem { padding: 4px 0; }
+.hash { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--color-fg); }
+.commitMsg { font-weight: 400; color: var(--color-muted); }
+.divider { border-top: 1px solid var(--color-edge); }
+
+.btnList { display: flex; flex-direction: column; gap: 6px; padding: 12px; }
+.btnAgent { width: 100%; border-radius: 6px; border: none; background: var(--color-accent); padding: 8px 12px; text-align: left; font-size: 13px; color: #fff; cursor: pointer; transition: filter 0.15s; }
+.btnAgent:hover { filter: brightness(1.1); }
+.btnSecondary { width: 100%; border-radius: 6px; border: none; background: var(--color-btnbg); padding: 8px 12px; text-align: left; font-size: 13px; color: var(--color-fg); cursor: pointer; transition: background 0.15s; }
+.btnSecondary:hover { background: rgba(255, 255, 255, 0.1); }
+.touristNote { padding: 8px 4px; font-size: 12px; color: var(--color-dim); }
+
+/* ── Экран «проект не найден» ── */
+.notFound { display: flex; height: 100vh; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: var(--color-app); color: var(--color-fg); }
+.notFoundMsg { font-size: 14px; color: var(--color-muted); }
+.notFoundBtn { border-radius: 6px; border: 1px solid var(--color-accent); background: var(--color-accentbg); padding: 8px 16px; font-size: 14px; color: #fff; cursor: pointer; transition: filter 0.15s; }
+.notFoundBtn:hover { filter: brightness(1.25); }
+
+/* ── Десктоп: правая панель встроена, мобильные элементы скрыты ── */
+@media (min-width: 640px) {
+  .userBox { display: flex; }
+}
+@media (min-width: 1024px) {
+  .menuBtn, .scrim, .rightHeader { display: none; }
+  .right {
+    position: static;
+    top: auto;
+    z-index: auto;
+    width: 240px;
+    max-width: none;
+    overflow: visible;
+    transform: none;
+    box-shadow: none;
+  }
+}
