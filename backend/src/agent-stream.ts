@@ -19,6 +19,7 @@ export interface RunOptions {
   cwd: string;
   prompt: string;
   agent: string;                // ключ PROMPTS; {p} заменяется на cwd
+  roleNote?: string;            // ролевая надстройка к системному промпту (роль пользователя)
   sessionId?: string | null;    // для --resume (продолжение контекста)
   partial?: boolean;            // --include-partial-messages → токеновый стрим
   onEvent: (ev: AgentEvent) => void;
@@ -27,7 +28,8 @@ export interface RunOptions {
 // Запустить агента и стримить нормализованные события в onEvent. Возвращает процесс
 // (чтобы можно было прервать через .kill()). На exit гарантированно шлёт {kind:'done'}.
 export function runClaude(opts: RunOptions): ChildProcess {
-  const sys = (PROMPTS[opts.agent] || PROMPTS.manager).replace(/{p}/g, opts.cwd);
+  let sys = (PROMPTS[opts.agent] || PROMPTS.manager).replace(/{p}/g, opts.cwd);
+  if (opts.roleNote) sys += ' ' + opts.roleNote;
   const args = ['-p', opts.prompt, '--append-system-prompt', sys,
     '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
   if (opts.partial) args.push('--include-partial-messages');

@@ -6,6 +6,7 @@ import PromptModal, { PromptConfig } from './PromptModal'
 import { agentColors, AGENTS, agentLabel, OVERSEER } from './theme'
 import { API, WS_URL } from './config'
 import { Project, GitCommit, GitBranches } from './types'
+import { can, roleLabel, logout, User } from './auth'
 
 // Тяжёлые панели — отдельными lazy-чанками (не на старте): чат с агентом и сырой терминал
 const ChatPanel = lazy(() => import('./ChatPanel'))
@@ -47,9 +48,10 @@ function loadPersisted(wid: string): Persisted {
 // открыть лаунчер выбора проекта в НОВОЙ вкладке браузера
 const openLauncher = () => window.open(location.pathname, '_blank')
 
-export default function App({ workspaceId }: { workspaceId: string }) {
+export default function App({ workspaceId, user }: { workspaceId: string; user: User }) {
   const isOverseer = workspaceId === OVERSEER
   const persisted = useRef(loadPersisted(workspaceId)).current
+  const doLogout = () => logout().then(() => location.reload())
 
   const [wsName, setWsName] = useState(isOverseer ? 'Общий менеджер' : '…')
   const [notFound, setNotFound] = useState(false)
@@ -181,6 +183,11 @@ export default function App({ workspaceId }: { workspaceId: string }) {
             </span>
           )}
           <span>{isOverseer ? 'Общий менеджер' : 'Project: ' + wsName}</span>
+          <span className="hidden items-center gap-1.5 border-l border-edge pl-2 sm:flex" title={'Роль: ' + roleLabel[user.role]}>
+            <span className="text-fg">{user.username}</span>
+            <span className="rounded bg-white/5 px-1.5 py-0.5 text-[11px]">{roleLabel[user.role]}</span>
+            <button onClick={doLogout} title="Выйти" className="rounded px-1.5 text-muted transition-colors hover:text-fg">⎋</button>
+          </span>
         </span>
         <button onClick={() => setRightOpen(o => !o)} title="Действия" className="ml-3 rounded px-1.5 py-1 text-base leading-none text-muted transition-colors hover:text-fg lg:hidden">⚙</button>
       </div>
@@ -273,9 +280,10 @@ export default function App({ workspaceId }: { workspaceId: string }) {
             <>
               <div className="border-b border-edge px-3 py-2 text-[10px] font-bold tracking-[0.1em] text-muted">ОБЩИЙ МЕНЕДЖЕР</div>
               <div className="flex flex-col gap-1.5 p-3">
-                <button onClick={() => openAgent(OVERSEER)} className="w-full rounded-md bg-accent px-3 py-2 text-left text-[13px] text-white transition hover:brightness-110">🧭 Открыть менеджера</button>
-                <button onClick={() => setRepoModalOpen(true)} className="w-full rounded-md bg-btnbg px-3 py-2 text-left text-[13px] text-fg transition hover:bg-white/10">➕ Добавить репозиторий</button>
-                <button onClick={openTerminal} className="w-full rounded-md bg-btnbg px-3 py-2 text-left text-[13px] text-fg transition hover:bg-white/10">⌨ Терминал</button>
+                {can(user.role, 'agent.run') && <button onClick={() => openAgent(OVERSEER)} className="w-full rounded-md bg-accent px-3 py-2 text-left text-[13px] text-white transition hover:brightness-110">🧭 Открыть менеджера</button>}
+                {can(user.role, 'project.add') && <button onClick={() => setRepoModalOpen(true)} className="w-full rounded-md bg-btnbg px-3 py-2 text-left text-[13px] text-fg transition hover:bg-white/10">➕ Добавить репозиторий</button>}
+                {can(user.role, 'terminal.open') && <button onClick={openTerminal} className="w-full rounded-md bg-btnbg px-3 py-2 text-left text-[13px] text-fg transition hover:bg-white/10">⌨ Терминал</button>}
+                {user.role === 'tourist' && <div className="px-1 py-2 text-[12px] text-dim">Гостевой доступ — только просмотр.</div>}
               </div>
             </>
           ) : (
@@ -292,14 +300,15 @@ export default function App({ workspaceId }: { workspaceId: string }) {
 
               <div className="border-t border-edge" />
               <div className="flex flex-col gap-1.5 p-3">
-                {AGENTS.map(a => (
+                {can(user.role, 'agent.run') && AGENTS.map(a => (
                   <button key={a.type} onClick={() => openAgent(a.type)} className="w-full rounded-md bg-accent px-3 py-2 text-left text-[13px] text-white transition hover:brightness-110" style={{ backgroundColor: agentColors[a.type] }}>
                     + {a.label}
                   </button>
                 ))}
-                <button onClick={openTerminal} className="w-full rounded-md bg-btnbg px-3 py-2 text-left text-[13px] text-fg transition hover:bg-white/10">⌨ Терминал</button>
-                <button onClick={() => setPromptCfg({ title: 'Коммит', label: 'Сообщение коммита', placeholder: 'chore: update', confirmLabel: 'Закоммитить', onSubmit: m => axios.post(API + '/api/projects/' + workspaceId + '/commit', { message: m }).then(() => { axios.get<GitCommit[]>(API + '/api/projects/' + workspaceId + '/log').then(r => setLog(r.data)) }) })} className="w-full rounded-md bg-btnbg px-3 py-2 text-left text-[13px] text-fg transition hover:bg-white/10">Commit</button>
-                <button onClick={() => axios.post(API + '/api/projects/' + workspaceId + '/push')} className="w-full rounded-md bg-btnbg px-3 py-2 text-left text-[13px] text-fg transition hover:bg-white/10">Push</button>
+                {can(user.role, 'terminal.open') && <button onClick={openTerminal} className="w-full rounded-md bg-btnbg px-3 py-2 text-left text-[13px] text-fg transition hover:bg-white/10">⌨ Терминал</button>}
+                {can(user.role, 'git.commit') && <button onClick={() => setPromptCfg({ title: 'Коммит', label: 'Сообщение коммита', placeholder: 'chore: update', confirmLabel: 'Закоммитить', onSubmit: m => axios.post(API + '/api/projects/' + workspaceId + '/commit', { message: m }).then(() => { axios.get<GitCommit[]>(API + '/api/projects/' + workspaceId + '/log').then(r => setLog(r.data)) }) })} className="w-full rounded-md bg-btnbg px-3 py-2 text-left text-[13px] text-fg transition hover:bg-white/10">Commit</button>}
+                {can(user.role, 'git.push') && <button onClick={() => axios.post(API + '/api/projects/' + workspaceId + '/push')} className="w-full rounded-md bg-btnbg px-3 py-2 text-left text-[13px] text-fg transition hover:bg-white/10">Push</button>}
+                {user.role === 'tourist' && <div className="px-1 py-2 text-[12px] text-dim">Гостевой доступ — только просмотр.</div>}
               </div>
             </>
           )}

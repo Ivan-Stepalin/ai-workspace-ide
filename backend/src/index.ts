@@ -12,6 +12,8 @@ import { getLog, getBranches, commitAll, pushRepo } from './git.js';
 import { listProjects, createProject, getProject, cloneRepo, deleteProject, PROJECTS_DIR } from './projects.js';
 import { initTelegramBot } from './telegram.js';
 import { handleChatWs, listChats, detachChatWs, initChatDb } from './chat.js';
+import { initAuth, registerAuthRoutes, requireAuth, reqUser, userFromCookieHeader, User } from './auth.js';
+import { can } from './permissions.js';
 import { WsMessage } from './types.js';
 
 const app = express();
@@ -58,6 +60,8 @@ let termSeq = 0;
 
 // Подписки: главный WS каждого воркспейса регистрируется для получения broadcast-событий.
 const wsSubscriptions = new Map<WebSocket, string>();
+// Аутентифицированный пользователь каждого WS-соединения (по cookie при апгрейде).
+const wsUsers = new Map<WebSocket, User | null>();
 
 function killTerminal(id: string): void {
   const t = terminals[id];
@@ -74,6 +78,8 @@ function broadcast(data: object): void {
   wss.clients.forEach(c => c.readyState === WebSocket.OPEN && c.send(msg));
 }
 
+// Синхронизация всех навыков из backend/skills (overseer-навыки + role-* под роли
+// пользователей) в PROJECTS_DIR/.claude/skills, откуда их подхватывает claude у overseer.
 function syncManagerSkills(): void {
   try {
     const src = path.resolve('skills');
@@ -93,16 +99,27 @@ function syncProjectsGuide(): void {
   } catch (e) { console.error('projects guide sync failed:', e); }
 }
 
+// ── Авторизация: /api/auth/* публичны, остальной /api/* — за requireAuth ──
+registerAuthRoutes(app);
+app.use('/api', (req, res, next) => {
+  if (req.path.startsWith('/auth/')) return next();
+  requireAuth(req, res, next);
+});
+const gate = (action: Parameters<typeof can>[1]) => (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (!can(reqUser(req)?.role, action)) { res.status(403).json({ error: 'Нет прав для этого действия' }); return; }
+  next();
+};
+
 app.get('/api/projects', (_req, res) => res.json(listProjects()));
-app.post('/api/projects', async (req, res) => { const proj = await createProject(req.body.name); res.json(proj); });
-app.post('/api/projects/clone', async (req, res) => {
+app.post('/api/projects', gate('project.add'), async (req, res) => { const proj = await createProject(req.body.name); res.json(proj); });
+app.post('/api/projects/clone', gate('project.add'), async (req, res) => {
   try {
     const proj = await cloneRepo(req.body.url, req.body.name);
     broadcast({ type: 'projects_updated' });
     res.json(proj);
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
-app.delete('/api/projects/:id', (req, res) => {
+app.delete('/api/projects/:id', gate('project.delete'), (req, res) => {
   const p = getProject(req.params.id);
   if (!p) return res.status(404).json({ error: 'Not found' });
   try {
@@ -114,8 +131,8 @@ app.delete('/api/projects/:id', (req, res) => {
 app.get('/api/projects/:id/log', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json([]); res.json(await getLog(p.path)); });
 app.get('/api/projects/:id/branches', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json({ all: [], current: '' }); res.json(await getBranches(p.path)); });
 
-app.post('/api/projects/:id/commit', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json({ ok: false }); await commitAll(p.path, req.body.message || 'chore: update'); res.json({ ok: true }); });
-app.post('/api/projects/:id/push', async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json({ ok: false }); await pushRepo(p.path); res.json({ ok: true }); });
+app.post('/api/projects/:id/commit', gate('git.commit'), async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json({ ok: false }); await commitAll(p.path, req.body.message || 'chore: update'); res.json({ ok: true }); });
+app.post('/api/projects/:id/push', gate('git.push'), async (req, res) => { const p = getProject(req.params.id); if (!p) return res.json({ ok: false }); await pushRepo(p.path); res.json({ ok: true }); });
 
 app.get('/api/workspaces/:wid/terminals', (req, res) => {
   const wid = req.params.wid;
@@ -135,10 +152,15 @@ if (serveFrontend) {
   });
 }
 
-wss.on('connection', ws => {
+wss.on('connection', (ws, req) => {
+  // Аутентификация соединения по cookie (браузер шлёт её при апгрейде WS на том же origin).
+  const user = userFromCookieHeader(req.headers.cookie);
+  wsUsers.set(ws, user);
+
   ws.on('message', async (raw: Buffer) => {
     try {
       const msg = JSON.parse(raw.toString()) as WsMessage;
+      const u = wsUsers.get(ws) ?? null;
 
       // Подписка главного WS воркспейса — для получения scoped-бродкастов.
       if (msg.type === 'subscribe' && msg.workspaceId) {
@@ -146,10 +168,14 @@ wss.on('connection', ws => {
         return;
       }
 
-      // Чат-сообщения обрабатывает отдельный модуль (своё WS-соединение на вкладку).
-      if (handleChatWs(ws, msg)) return;
+      // Чат с агентом — нужна возможность agent.run; обработка в отдельном модуле.
+      if (typeof msg.type === 'string' && msg.type.startsWith('chat_')) {
+        if (!can(u?.role, 'agent.run')) { ws.send(JSON.stringify({ type: 'chat_event', chatId: msg.chatId, event: { kind: 'error', text: 'Нет прав на запуск агента' } })); return; }
+        if (handleChatWs(ws, msg, u)) return;
+      }
 
       if (msg.type === 'terminal_create') {
+        if (!can(u?.role, 'terminal.open')) { ws.send(JSON.stringify({ type: 'terminal_exit', terminalId: msg.terminalId })); return; }
         const agent = msg.agent;
         let cwd: string;
         if (agent === 'overseer' || msg.projectId === 'overseer') {
@@ -258,6 +284,7 @@ wss.on('connection', ws => {
 
   ws.on('close', () => {
     wsSubscriptions.delete(ws);
+    wsUsers.delete(ws);
     detachChatWs(ws);
     for (const id in terminals) {
       const t = terminals[id];
@@ -273,6 +300,7 @@ wss.on('connection', ws => {
 const SERVER_PORT = Number(process.env.PORT || 3001);
 syncManagerSkills();
 syncProjectsGuide();
+initAuth();
 initChatDb();
 initTelegramBot();
 server.listen(SERVER_PORT, '0.0.0.0', () => console.log('Backend running on :' + SERVER_PORT));

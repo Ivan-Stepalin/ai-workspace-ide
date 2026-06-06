@@ -4,6 +4,7 @@ import AddRepoModal from './AddRepoModal'
 import ConfirmModal from './ConfirmModal'
 import { API } from './config'
 import { agentColors } from './theme'
+import { can, roleLabel, logout, User } from './auth'
 
 type Project = { id: string; name: string; path: string; created_at: number }
 
@@ -16,7 +17,8 @@ function openWorkspace(id: string, newTab = false): void {
 
 // Лаунчер: выбор проекта / создание нового / общий менеджер. Показывается, когда в URL нет ?p=.
 // Каждый проект открывается в своей вкладке браузера (этот экран — точка входа новой вкладки).
-export default function ProjectPicker() {
+export default function ProjectPicker({ user }: { user: User }) {
+  const doLogout = () => logout().then(() => location.reload())
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
@@ -56,6 +58,11 @@ export default function ProjectPicker() {
         <div className="mb-1 flex items-center gap-2.5">
           <span className="text-2xl">🤖</span>
           <h1 className="text-xl font-semibold">AI Workspace</h1>
+          <span className="ml-auto flex items-center gap-1.5 text-[12px] text-muted" title={'Роль: ' + roleLabel[user.role]}>
+            <span className="text-fg">{user.username}</span>
+            <span className="rounded bg-white/5 px-1.5 py-0.5 text-[11px]">{roleLabel[user.role]}</span>
+            <button onClick={doLogout} title="Выйти" className="rounded border border-edge px-2 py-0.5 transition-colors hover:bg-white/5 hover:text-fg">Выйти</button>
+          </span>
         </div>
         <p className="mb-6 text-sm text-muted">Выбери проект — он откроется в этой вкладке. Другой проект открывай в новой вкладке.</p>
 
@@ -73,10 +80,12 @@ export default function ProjectPicker() {
 
         <div className="mb-2 flex items-center justify-between">
           <span className="text-[11px] font-semibold tracking-[0.08em] text-muted">ПРОЕКТЫ</span>
-          <div className="flex gap-2">
-            <button onClick={() => setRepoOpen(true)} className="rounded-md border border-edge px-2.5 py-1 text-xs text-muted transition hover:bg-white/5 hover:text-fg">➕ Репозиторий</button>
-            <button onClick={() => { setCreating(c => !c); setName('') }} className="rounded-md border border-accent bg-accentbg px-2.5 py-1 text-xs text-white transition hover:brightness-125">+ Новый проект</button>
-          </div>
+          {can(user.role, 'project.add') && (
+            <div className="flex gap-2">
+              <button onClick={() => setRepoOpen(true)} className="rounded-md border border-edge px-2.5 py-1 text-xs text-muted transition hover:bg-white/5 hover:text-fg">➕ Репозиторий</button>
+              <button onClick={() => { setCreating(c => !c); setName('') }} className="rounded-md border border-accent bg-accentbg px-2.5 py-1 text-xs text-white transition hover:brightness-125">+ Новый проект</button>
+            </div>
+          )}
         </div>
 
         {creating && (
@@ -102,11 +111,13 @@ export default function ProjectPicker() {
             >
               <span className="pr-6 text-sm font-medium">{p.name}</span>
               <span className="w-full truncate text-[11px] text-dim">{p.path}</span>
-              <span
-                onClick={e => { e.stopPropagation(); setToDelete(p) }}
-                title="Удалить проект"
-                className="absolute right-2 top-2 rounded px-1.5 text-base leading-none text-dim opacity-0 transition hover:bg-white/10 hover:text-fg group-hover:opacity-100"
-              >×</span>
+              {can(user.role, 'project.delete') && (
+                <span
+                  onClick={e => { e.stopPropagation(); setToDelete(p) }}
+                  title="Удалить проект"
+                  className="absolute right-2 top-2 rounded px-1.5 text-base leading-none text-dim opacity-0 transition hover:bg-white/10 hover:text-fg group-hover:opacity-100"
+                >×</span>
+              )}
             </div>
           ))}
         </div>

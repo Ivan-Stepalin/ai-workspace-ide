@@ -57,13 +57,16 @@ ai-workspace-ide/
 
 Код приложения (этот репозиторий) ≠ данные пользователя. Данные **не коммитятся** (`.gitignore`):
 - `PROJECTS_DIR` — папка с проектами; **каждый подкаталог автоматически становится проектом** (автообнаружение в `listProjects()`).
-- `workspace.db` — SQLite (better-sqlite3): таблицы `projects`, `chat_sessions` (session_id чатов для `--resume`), `tg_sessions` (привязки Telegram).
+- `workspace.db` — SQLite (better-sqlite3): таблицы `projects`, `users` (логины/роли), `chat_sessions` (session_id чатов для `--resume`), `tg_sessions` (привязки Telegram).
 
 Пути задаются через env (`backend/.env`, есть `.env.example`):
 - `DATA_DIR` (по умолчанию `./data`) → внутри `projects/` и `workspace.db`;
 - либо точечно `PROJECTS_DIR` / `DB_PATH`;
 - `PORT` — порт бэкенда;
-- `FRONTEND_DIST` — путь к собранному фронту для прод-раздачи (по умолчанию `../frontend/dist` относительно cwd бэкенда; если папки нет — бэкенд работает в режиме только API+WS).
+- `FRONTEND_DIST` — путь к собранному фронту для прод-раздачи (по умолчанию `../frontend/dist` относительно cwd бэкенда; если папки нет — бэкенд работает в режиме только API+WS);
+- `AUTH_SECRET` — секрет для подписи сессионного токена (в проде задать обязательно, иначе небезопасный дефолт);
+- `BOOTSTRAP_ADMIN` — сид первого пользователя: `"логин:пароль"` или `"логин:пароль:роль"` (по умолчанию роль `coder`); создаётся при старте, если такого нет;
+- `AUTH_COOKIE_SECURE=1` — выставлять флаг `Secure` на cookie (для https).
 
 Хост бэкенда на фронте — `VITE_BACKEND_HOST` / `VITE_BACKEND_PORT` (по умолчанию хост из адреса страницы). См. `frontend/src/config.ts`. **Никаких захардкоженных путей/IP в коде — только env с дефолтами.**
 
@@ -97,11 +100,21 @@ ai-workspace-ide/
 
 Две роли (`PROMPTS` в `agents.ts`): `manager` — инженер-агент проекта, сам пишет/правит код, коммитит, запускает тесты (cwd = папка проекта); `overseer` («Общий менеджер») — cwd = `PROJECTS_DIR`, видит все проекты, сам код не правит, рекомендует открыть агента, умеет клонировать репозитории. Старые ссылки на `coder`/`reviewer` безопасно сваливаются на `manager` (фолбэк в `runClaude`).
 
+### Авторизация и роли пользователей
+
+⚠️ **Две разные «роли», не путать.** (1) *Тип агента* (`manager`/`overseer`) — где работает `claude`. (2) *Роль пользователя* (`coder`/`analyst`/`tester`/`tourist`) — что пользователю можно.
+
+- **`auth.ts`** — пользователи в `workspace.db` (`users`), пароли `scrypt`, сессия — HMAC-токен `{id,exp}` в httpOnly-cookie. Роуты `/api/auth/login` / `logout` / `me` / `users` (создание юзеров — только роль с `user.manage`). `requireAuth` (middleware), `userFromCookieHeader` (для апгрейда WS), `reqUser(req)`.
+- **`permissions.ts`** — `can(role, action)` + матрица. Действия: `agent.run`, `terminal.open`, `git.commit`, `git.push`, `project.add`, `project.delete`, `chat.read`, `user.manage`. Роли: `coder` (всё + управление юзерами), `analyst` (агент + чтение), `tester` (агент + терминал + чтение), `tourist` (только чтение).
+- **Гейт.** Backend: `/api/*` (кроме `/api/auth/*`) за `requireAuth`; чувствительные роуты — за `gate(action)`; WS — пользователь берётся из cookie при апгрейде (`wsUsers`), `chat_*` требует `agent.run`, `terminal_create` — `terminal.open`. Frontend — **источник истины всё равно сервер**, кнопки лишь скрываются по `can()` (зеркало матрицы в `frontend/src/auth.ts`).
+- **Скиллы под роли.** `backend/skills/role-{coder,analyst,tester,tourist}/SKILL.md` синкаются вместе с остальными (`syncManagerSkills`); ролевая надстройка к системному промпту — `ROLE_NOTES` (`agents.ts`) → `runClaude({roleNote})`, роль приходит из `wsUsers` через `handleChatWs`.
+
 Навыки лежат в `backend/skills/<name>/SKILL.md` (формат `.claude/skills`). При старте бэкенда `syncManagerSkills()` копирует их в `PROJECTS_DIR/.claude/skills/`, откуда их подхватывает `claude` у overseer (его cwd = `PROJECTS_DIR`). Новый навык = новая папка в `backend/skills/` + перезапуск бэкенда.
 
 ## Frontend (`frontend/src/`)
 
-- `main.tsx` — точка входа и роутинг: читает `?p=` из URL. Есть `?p=<id>` → рендерит `App` (воркспейс), иначе → `ProjectPicker` (лаунчер). Никаких условных хуков в App.
+- `main.tsx` — точка входа: гейт авторизации (`fetchMe`; нет сессии → `Login`, есть → роутинг по `?p=`: `App` / `ProjectPicker`, в оба прокидывается `user`), `axios.defaults.withCredentials = true`.
+- `Login.tsx` — форма входа. `auth.ts` — клиент (`login`/`logout`/`fetchMe`) + зеркало матрицы прав (`can`, `roleLabel`).
 - `ProjectPicker.tsx` — лаунчер: список проектов (выбор → `?p=<id>` с перезагрузкой), создание нового проекта инлайном, «Добавить репозиторий», вход в общий менеджер (`?p=overseer`), удаление проекта. Каждый проект открывается в своей вкладке браузера.
 - `App.tsx` — оркестратор ОДНОГО воркспейса (проп `workspaceId`): состояние, главный WebSocket (бродкасты + `chat_close`/`terminal_close`), API, раскладка (центр + правая панель действий/git). Текущая ветка — компактно в топбаре. Для overseer git-панель скрыта.
 - `ChatPanel.tsx` — **нативный чат с агентом** (основной интерфейс): своё WS-соединение, пузыри сообщений, markdown-рендер ответа (`react-markdown` + `remark-gfm` + `rehype-highlight`), чипы вызовов инструментов, токеновый стрим, кнопки «Стоп»/«Новый диалог», автоскролл. `memo` + lazy.

@@ -9,6 +9,7 @@ import { ChildProcess } from 'child_process';
 import Database from 'better-sqlite3';
 import { getProject, PROJECTS_DIR, DB_PATH } from './projects.js';
 import { runClaude } from './agent-stream.js';
+import { ROLE_NOTES } from './agents.js';
 import { WsMessage } from './types.js';
 
 const DETACH_GC_MS = 30 * 60 * 1000;
@@ -18,6 +19,7 @@ interface ChatSession {
   workspaceId: string;          // projectId или 'overseer'
   agent: string;
   cwd: string;
+  roleNote?: string;            // ролевая надстройка промпта (роль пользователя)
   sessionId: string | null;     // для --resume
   history: ChatMsg[];
   proc: ChildProcess | null;    // активный ответ (один на чат)
@@ -60,7 +62,8 @@ export function listChats(workspaceId: string): { id: string; agent: string }[] 
 }
 
 // Возвращает true, если сообщение относится к чату и обработано.
-export function handleChatWs(ws: WebSocket, msg: WsMessage): boolean {
+// user — аутентифицированный пользователь WS (для ролевой надстройки промпта).
+export function handleChatWs(ws: WebSocket, msg: WsMessage, user?: { role: string } | null): boolean {
   const chatId = msg.chatId;
 
   if (msg.type === 'chat_create' && chatId) {
@@ -74,14 +77,16 @@ export function handleChatWs(ws: WebSocket, msg: WsMessage): boolean {
       if (!p) { ws.send(JSON.stringify({ type: 'chat_event', chatId, event: { kind: 'error', text: 'Проект не найден' } })); return true; }
       cwd = p.path;
     }
+    const roleNote = user?.role ? ROLE_NOTES[user.role] : undefined;
 
     let s = chats.get(chatId);
     if (s) {
       // переподключение: гасим GC, перевязываем ws, отдаём историю
       if (s.killTimer) { clearTimeout(s.killTimer); s.killTimer = null; }
       s.ws = ws;
+      if (roleNote) s.roleNote = roleNote;
     } else {
-      s = { workspaceId, agent, cwd, sessionId: null, history: [], proc: null, ws, killTimer: null };
+      s = { workspaceId, agent, cwd, roleNote, sessionId: null, history: [], proc: null, ws, killTimer: null };
       chats.set(chatId, s);
     }
     ws.send(JSON.stringify({ type: 'chat_ready', chatId }));
@@ -102,7 +107,7 @@ export function handleChatWs(ws: WebSocket, msg: WsMessage): boolean {
     let streamed = '';   // накопленные дельты — фолбэк, если result пустой
     let errText = '';
     s.proc = runClaude({
-      cwd: s.cwd, prompt: text, agent: s.agent, sessionId: s.sessionId, partial: true,
+      cwd: s.cwd, prompt: text, agent: s.agent, roleNote: s.roleNote, sessionId: s.sessionId, partial: true,
       onEvent: ev => {
         if (ev.kind === 'init') { s.sessionId = ev.sessionId; persist(chatId, s); }
         else if (ev.kind === 'tool') { s.history.push({ role: 'tool', text: ev.arg, name: ev.name }); send(s, { type: 'chat_event', chatId, event: ev }); }
