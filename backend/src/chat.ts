@@ -1,9 +1,9 @@
 // Нативный чат с агентом в браузере: headless `claude` (см. agent-stream.ts), события
 // которого нормализуются и шлются в браузер по WebSocket как chat_event. Контекст диалога
 // держится через --resume (session_id из события init). Источник истины — сервер: живые
-// сессии лежат в памяти (Map), поэтому переподключение из свежей вкладки восстанавливает
-// диалог через chat_restore (как у терминалов). session_id персистится в workspace.db,
-// чтобы --resume пережил перезапуск бэкенда.
+// сессии лежат в памяти (Map), а история сообщений + session_id персистятся в workspace.db
+// (chat_sessions + chat_messages), поэтому диалог переживает и переподключение из свежей
+// вкладки, и перезапуск бэкенда. История чистится по ретенции (старше CHAT_RETENTION_MS).
 import { WebSocket } from 'ws';
 import { ChildProcess } from 'child_process';
 import Database from 'better-sqlite3';
@@ -13,6 +13,8 @@ import { ROLE_NOTES } from './agents.js';
 import { WsMessage } from './types.js';
 
 const DETACH_GC_MS = 30 * 60 * 1000;
+const RETENTION_MS = Number(process.env.CHAT_RETENTION_MS) || 7 * 24 * 60 * 60 * 1000;     // окно хранения истории
+const SWEEP_MS = Number(process.env.CHAT_RETENTION_SWEEP_MS) || 60 * 60 * 1000;            // период чистки
 
 export interface ChatMsg { role: 'user' | 'assistant' | 'tool'; text: string; name?: string }
 interface ChatSession {
@@ -39,9 +41,33 @@ export function initChatDb(): void {
     session_id TEXT,
     updated_at INTEGER
   )`);
+  // Сообщения — отдельной таблицей (а не JSON-блобом), чтобы чистка по дате была тривиальной.
+  db.exec(`CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    name TEXT,
+    created_at INTEGER NOT NULL
+  )`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_messages_chat ON chat_messages(chat_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages(created_at)`);
+  pruneOldMessages();
+  setInterval(pruneOldMessages, SWEEP_MS).unref();
 }
 
-function persist(chatId: string, s: ChatSession): void {
+// Удалить сообщения старше окна ретенции и осиротевшие/пустые сессии.
+export function pruneOldMessages(): void {
+  if (!db) return;
+  const cutoff = Date.now() - RETENTION_MS;
+  const del = db.prepare('DELETE FROM chat_messages WHERE created_at < ?').run(cutoff);
+  // Сессии без сообщений и давно не обновлявшиеся больше не нужны (их session_id для --resume протух).
+  db.prepare(`DELETE FROM chat_sessions WHERE updated_at < ?
+    AND chat_id NOT IN (SELECT DISTINCT chat_id FROM chat_messages)`).run(cutoff);
+  if (del.changes) console.log(`[chat] ретенция: удалено ${del.changes} сообщений старше ${Math.round(RETENTION_MS / 86400000)} дн.`);
+}
+
+function persistSession(chatId: string, s: ChatSession): void {
   if (!db) return;
   db.prepare(`INSERT INTO chat_sessions (chat_id, workspace_id, agent, session_id, updated_at)
     VALUES (?, ?, ?, ?, ?)
@@ -50,15 +76,39 @@ function persist(chatId: string, s: ChatSession): void {
     .run(chatId, s.workspaceId, s.agent, s.sessionId, Date.now());
 }
 
+function persistMsg(chatId: string, m: ChatMsg): void {
+  if (!db) return;
+  db.prepare('INSERT INTO chat_messages (chat_id, role, content, name, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(chatId, m.role, m.text, m.name ?? null, Date.now());
+}
+
+function loadHistory(chatId: string): ChatMsg[] {
+  if (!db) return [];
+  const rows = db.prepare('SELECT role, content, name FROM chat_messages WHERE chat_id = ? ORDER BY id ASC').all(chatId) as { role: ChatMsg['role']; content: string; name: string | null }[];
+  return rows.map(r => ({ role: r.role, text: r.content, ...(r.name ? { name: r.name } : {}) }));
+}
+
+function dropPersisted(chatId: string): void {
+  if (!db) return;
+  db.prepare('DELETE FROM chat_messages WHERE chat_id = ?').run(chatId);
+  db.prepare('DELETE FROM chat_sessions WHERE chat_id = ?').run(chatId);
+}
+
 function send(s: ChatSession, data: object): void {
   if (s.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(JSON.stringify(data));
 }
 
-// Список живых чат-сессий воркспейса — для переподключения фронта (аналог /terminals).
+// Список чат-сессий воркспейса для переподключения фронта (аналог /terminals): живые из памяти
+// + персистированные с непустой историей (переживают рестарт бэкенда).
 export function listChats(workspaceId: string): { id: string; agent: string }[] {
-  return [...chats.entries()]
-    .filter(([, s]) => s.workspaceId === workspaceId)
-    .map(([id, s]) => ({ id, agent: s.agent }));
+  const out = new Map<string, string>();
+  for (const [id, s] of chats) if (s.workspaceId === workspaceId) out.set(id, s.agent);
+  if (db) {
+    const rows = db.prepare(`SELECT chat_id, agent FROM chat_sessions
+      WHERE workspace_id = ? AND chat_id IN (SELECT DISTINCT chat_id FROM chat_messages)`).all(workspaceId) as { chat_id: string; agent: string }[];
+    for (const r of rows) if (!out.has(r.chat_id)) out.set(r.chat_id, r.agent || 'manager');
+  }
+  return [...out.entries()].map(([id, agent]) => ({ id, agent }));
 }
 
 // Возвращает true, если сообщение относится к чату и обработано.
@@ -81,12 +131,14 @@ export function handleChatWs(ws: WebSocket, msg: WsMessage, user?: { role: strin
 
     let s = chats.get(chatId);
     if (s) {
-      // переподключение: гасим GC, перевязываем ws, отдаём историю
+      // переподключение к живой сессии: гасим GC, перевязываем ws
       if (s.killTimer) { clearTimeout(s.killTimer); s.killTimer = null; }
       s.ws = ws;
       if (roleNote) s.roleNote = roleNote;
     } else {
-      s = { workspaceId, agent, cwd, roleNote, sessionId: null, history: [], proc: null, ws, killTimer: null };
+      // нет в памяти — поднимаем из БД (история + session_id переживают рестарт)
+      const row = db?.prepare('SELECT session_id FROM chat_sessions WHERE chat_id = ?').get(chatId) as { session_id: string | null } | undefined;
+      s = { workspaceId, agent, cwd, roleNote, sessionId: row?.session_id ?? null, history: loadHistory(chatId), proc: null, ws, killTimer: null };
       chats.set(chatId, s);
     }
     ws.send(JSON.stringify({ type: 'chat_ready', chatId }));
@@ -101,7 +153,9 @@ export function handleChatWs(ws: WebSocket, msg: WsMessage, user?: { role: strin
     if (s.proc) { send(s, { type: 'chat_event', chatId, event: { kind: 'error', text: 'Агент ещё отвечает — дождись или нажми «Стоп».' } }); return true; }
 
     const text = msg.text || '';
-    s.history.push({ role: 'user', text });
+    const userMsg: ChatMsg = { role: 'user', text };
+    s.history.push(userMsg);
+    persistMsg(chatId, userMsg);
 
     let finalText = '';
     let streamed = '';   // накопленные дельты — фолбэк, если result пустой
@@ -109,8 +163,8 @@ export function handleChatWs(ws: WebSocket, msg: WsMessage, user?: { role: strin
     s.proc = runClaude({
       cwd: s.cwd, prompt: text, agent: s.agent, roleNote: s.roleNote, sessionId: s.sessionId, partial: true,
       onEvent: ev => {
-        if (ev.kind === 'init') { s.sessionId = ev.sessionId; persist(chatId, s); }
-        else if (ev.kind === 'tool') { s.history.push({ role: 'tool', text: ev.arg, name: ev.name }); send(s, { type: 'chat_event', chatId, event: ev }); }
+        if (ev.kind === 'init') { s.sessionId = ev.sessionId; persistSession(chatId, s); }
+        else if (ev.kind === 'tool') { const m: ChatMsg = { role: 'tool', text: ev.arg, name: ev.name }; s.history.push(m); persistMsg(chatId, m); send(s, { type: 'chat_event', chatId, event: ev }); }
         else if (ev.kind === 'delta') { streamed += ev.text; send(s, { type: 'chat_event', chatId, event: ev }); }
         else if (ev.kind === 'assistant') finalText = ev.text;
         else if (ev.kind === 'error') { errText = ev.text; send(s, { type: 'chat_event', chatId, event: ev }); }
@@ -118,13 +172,14 @@ export function handleChatWs(ws: WebSocket, msg: WsMessage, user?: { role: strin
           s.proc = null;
           const answer = finalText || streamed;
           if (answer) {
-            s.history.push({ role: 'assistant', text: answer });
+            const m: ChatMsg = { role: 'assistant', text: answer };
+            s.history.push(m); persistMsg(chatId, m);
             send(s, { type: 'chat_event', chatId, event: { kind: 'assistant', text: answer } });
           } else if (!errText && ev.code !== 0) {
             send(s, { type: 'chat_event', chatId, event: { kind: 'error', text: 'Агент завершился с ошибкой.' } });
           }
           send(s, { type: 'chat_event', chatId, event: { kind: 'done' } });
-          persist(chatId, s);
+          persistSession(chatId, s);
         }
       },
     });
@@ -137,19 +192,20 @@ export function handleChatWs(ws: WebSocket, msg: WsMessage, user?: { role: strin
     return true;
   }
 
-  // «Новый диалог» — сбросить контекст (--resume), сохранив сессию.
+  // «Новый диалог» — сбросить контекст (--resume) и историю, сохранив саму сессию.
   if (msg.type === 'chat_reset' && chatId) {
     const s = chats.get(chatId);
     if (s) {
       if (s.proc) { try { s.proc.kill(); } catch { /* ignore */ } s.proc = null; }
       s.sessionId = null;
       s.history = [];
-      persist(chatId, s);
+      dropPersisted(chatId);
       send(s, { type: 'chat_restore', chatId, messages: [] });
     }
     return true;
   }
 
+  // Закрытие вкладки — гасим сессию и удаляем её историю из БД.
   if (msg.type === 'chat_close' && chatId) {
     const s = chats.get(chatId);
     if (s) {
@@ -157,6 +213,7 @@ export function handleChatWs(ws: WebSocket, msg: WsMessage, user?: { role: strin
       if (s.proc) { try { s.proc.kill(); } catch { /* ignore */ } }
       chats.delete(chatId);
     }
+    dropPersisted(chatId);
     return true;
   }
 

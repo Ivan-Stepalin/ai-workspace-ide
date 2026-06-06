@@ -5,13 +5,27 @@ import rehypeHighlight from 'rehype-highlight'
 import 'highlight.js/styles/github-dark.css'
 import { WS_URL } from './config'
 import { agentColors, agentLabel, OVERSEER } from './theme'
+import { can, Role as UserRole, Action } from './auth'
 
 interface Props {
   projectId: string
   agent: string
   wsId: string              // = chatId; стабильный id серверной сессии для переподключения
+  role: UserRole            // роль пользователя — фильтрует набор стандартных команд
   active?: boolean
 }
+
+// Стандартные команды в селекте у поля ввода. send=true → сразу отправить; иначе вставить в поле.
+// need — capability-гейт: команда видна, только если роль её разрешает.
+type Cmd = { id: string; label: string; prompt: string; send?: boolean; need?: Action }
+const COMMANDS: Cmd[] = [
+  { id: 'status', label: 'git status', prompt: 'Покажи git status.', send: true },
+  { id: 'diff', label: 'Показать изменения (diff)', prompt: 'Покажи незакоммиченные изменения (git diff).', send: true },
+  { id: 'tests', label: 'Запустить тесты', prompt: 'Запусти тесты проекта и покажи результат.', send: true },
+  { id: 'build', label: 'Собрать проект', prompt: 'Собери проект и покажи результат сборки.', send: true },
+  { id: 'explain', label: 'Объясни структуру проекта', prompt: 'Кратко объясни структуру и назначение этого проекта.', send: true },
+  { id: 'commit', label: 'Закоммитить изменения', prompt: 'Закоммить текущие изменения с осмысленным сообщением.', send: true, need: 'git.commit' },
+]
 
 type Role = 'user' | 'assistant' | 'tool'
 interface ChatMessage { role: Role; text: string; name?: string; streaming?: boolean }
@@ -41,7 +55,7 @@ function Pre({ children }: { children?: React.ReactNode }) {
   )
 }
 
-function ChatPanel({ projectId, agent, wsId, active }: Props) {
+function ChatPanel({ projectId, agent, wsId, role, active }: Props) {
   const wsRef = useRef<WebSocket | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
@@ -110,13 +124,13 @@ function ChatPanel({ projectId, agent, wsId, active }: Props) {
 
   useEffect(() => { if (active) taRef.current?.focus() }, [active])
 
-  function submit() {
-    const text = input.trim()
+  function submit(textArg?: string) {
+    const text = (textArg ?? input).trim()
     if (!text || busy || !ready) return
     setMessages(m => [...m, { role: 'user', text }])
     send({ type: 'chat_send', chatId: wsId, text })
     setBusy(true)
-    setInput('')
+    if (textArg === undefined) setInput('')
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -125,6 +139,14 @@ function ChatPanel({ projectId, agent, wsId, active }: Props) {
 
   const stop = () => send({ type: 'chat_cancel', chatId: wsId })
   const reset = () => { send({ type: 'chat_reset', chatId: wsId }); setMessages([]); setBusy(false) }
+
+  const cmds = COMMANDS.filter(c => !c.need || can(role, c.need))
+  function runCommand(id: string) {
+    const cmd = cmds.find(c => c.id === id)
+    if (!cmd) return
+    if (cmd.send) submit(cmd.prompt)
+    else { setInput(cmd.prompt); taRef.current?.focus() }
+  }
 
   const color = agentColors[agent] || agentColors.manager
   const label = isOverseer ? '🧭 Общий менеджер' : '🤖 ' + agentLabel(agent)
@@ -195,6 +217,18 @@ function ChatPanel({ projectId, agent, wsId, active }: Props) {
 
       {/* Поле ввода */}
       <div className="flex flex-shrink-0 items-end gap-2 border-t border-edge bg-sidebar px-3 py-2.5">
+        {cmds.length > 0 && (
+          <select
+            value=""
+            onChange={e => { runCommand(e.target.value); e.currentTarget.value = '' }}
+            disabled={!ready || busy}
+            title="Стандартные команды"
+            className="h-[40px] flex-shrink-0 rounded-lg border border-edge bg-app px-2 text-[12px] text-muted outline-none transition-colors hover:text-fg focus:border-accent disabled:opacity-50"
+          >
+            <option value="" disabled>⚙ Команды</option>
+            {cmds.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+          </select>
+        )}
         <textarea
           ref={taRef}
           value={input}
@@ -208,7 +242,7 @@ function ChatPanel({ projectId, agent, wsId, active }: Props) {
         {busy ? (
           <button onClick={stop} className="rounded-lg border border-edge bg-app px-4 py-2 text-[13px] text-fg transition hover:bg-white/5">Стоп</button>
         ) : (
-          <button onClick={submit} disabled={!ready || !input.trim()} className="rounded-lg bg-accent px-4 py-2 text-[13px] text-white transition hover:brightness-110 disabled:opacity-40">Отправить</button>
+          <button onClick={() => submit()} disabled={!ready || !input.trim()} className="rounded-lg bg-accent px-4 py-2 text-[13px] text-white transition hover:brightness-110 disabled:opacity-40">Отправить</button>
         )}
       </div>
     </div>
@@ -237,4 +271,4 @@ const chatStyles = `
 
 // memo: ререндеры App не должны трогать живые чаты; пересоздаём только при смене сессии.
 export default memo(ChatPanel, (a, b) =>
-  a.projectId === b.projectId && a.agent === b.agent && a.wsId === b.wsId && a.active === b.active)
+  a.projectId === b.projectId && a.agent === b.agent && a.wsId === b.wsId && a.role === b.role && a.active === b.active)

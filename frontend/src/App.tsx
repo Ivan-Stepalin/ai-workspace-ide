@@ -236,6 +236,7 @@ export default function App({ workspaceId, user }: { workspaceId: string; user: 
                     projectId={workspaceId}
                     agent={tab.agentType}
                     wsId={tab.wsId}
+                    role={user.role}
                     active={activeUid === tab.uid}
                   />
                 </Suspense>

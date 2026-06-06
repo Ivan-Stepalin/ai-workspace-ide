@@ -57,7 +57,7 @@ ai-workspace-ide/
 
 Код приложения (этот репозиторий) ≠ данные пользователя. Данные **не коммитятся** (`.gitignore`):
 - `PROJECTS_DIR` — папка с проектами; **каждый подкаталог автоматически становится проектом** (автообнаружение в `listProjects()`).
-- `workspace.db` — SQLite (better-sqlite3): таблицы `projects`, `users` (логины/роли), `chat_sessions` (session_id чатов для `--resume`), `tg_sessions` (привязки Telegram).
+- `workspace.db` — SQLite (better-sqlite3): таблицы `projects`, `users` (логины/роли), `chat_sessions` + `chat_messages` (история чатов, чистится по ретенции), `tg_sessions` (привязки Telegram).
 
 Пути задаются через env (`backend/.env`, есть `.env.example`):
 - `DATA_DIR` (по умолчанию `./data`) → внутри `projects/` и `workspace.db`;
@@ -66,7 +66,8 @@ ai-workspace-ide/
 - `FRONTEND_DIST` — путь к собранному фронту для прод-раздачи (по умолчанию `../frontend/dist` относительно cwd бэкенда; если папки нет — бэкенд работает в режиме только API+WS);
 - `AUTH_SECRET` — секрет для подписи сессионного токена (в проде задать обязательно, иначе небезопасный дефолт);
 - `BOOTSTRAP_ADMIN` — сид первого пользователя: `"логин:пароль"` или `"логин:пароль:роль"` (по умолчанию роль `coder`); создаётся при старте, если такого нет;
-- `AUTH_COOKIE_SECURE=1` — выставлять флаг `Secure` на cookie (для https).
+- `AUTH_COOKIE_SECURE=1` — выставлять флаг `Secure` на cookie (для https);
+- `CHAT_RETENTION_MS` / `CHAT_RETENTION_SWEEP_MS` — окно хранения истории чатов (дефолт 7 дн.) и период чистки (дефолт 1 ч).
 
 Хост бэкенда на фронте — `VITE_BACKEND_HOST` / `VITE_BACKEND_PORT` (по умолчанию хост из адреса страницы). См. `frontend/src/config.ts`. **Никаких захардкоженных путей/IP в коде — только env с дефолтами.**
 
@@ -75,7 +76,7 @@ ai-workspace-ide/
 - `index.ts` — Express-роуты (`/api/projects/...`: список, создание, clone, delete, git log/branches/commit/push; `/api/workspaces/:wid/terminals` и `/api/workspaces/:wid/chats` — списки живых серверных сессий воркспейса для переподключения) + WebSocket-сервер (чаты + терминалы) + раздача прод-статики. Хелперы: `syncManagerSkills()` (навыки → `PROJECTS_DIR/.claude/skills`), `syncProjectsGuide()` (`backend/PROJECTS_CLAUDE.md` → `PROJECTS_DIR/CLAUDE.md`, правила запуска приложений проектов). Каждый `Term` хранит `workspaceId` (`projectId` или `'overseer'`) и `seq`.
 - `agents.ts` — только `PROMPTS`: ролевые системные промпты двух ролей (`manager` / `overseer`). Роль передаётся `claude` флагом `--append-system-prompt`.
 - `agent-stream.ts` — **общий раннер агента** в headless-режиме: `runClaude({cwd, prompt, agent, sessionId?, partial?, onEvent})` спавнит `claude -p ... --output-format stream-json` и отдаёт **нормализованные** события (`init` / `tool` / `delta` / `assistant` / `error` / `done`). Единая точка спавна и разбора NDJSON — переиспользуется и `chat.ts`, и `telegram.ts`.
-- `chat.ts` — серверные чат-сессии браузера (`Map<chatId, ChatSession>`, источник истины). WS-хендлеры `chat_create` / `chat_send` / `chat_cancel` / `chat_reset` / `chat_close`; история в памяти (для `chat_restore` при переподключении), `session_id` персистится в `chat_sessions` (`workspace.db`) ради `--resume` после рестарта. GC отвязанных сессий через `DETACH_GC_MS`=30 мин. `listChats(wid)` → `/api/workspaces/:wid/chats`.
+- `chat.ts` — серверные чат-сессии браузера (`Map<chatId, ChatSession>`, источник истины). WS-хендлеры `chat_create` / `chat_send` / `chat_cancel` / `chat_reset` / `chat_close`. История и `session_id` персистятся в `workspace.db` (`chat_messages` + `chat_sessions`) — диалог переживает и переподключение (`chat_restore`), и рестарт бэкенда (поднимается из БД). Ретенция: `pruneOldMessages()` чистит сообщения старше `CHAT_RETENTION_MS` (дефолт 7 дн.) при старте и по таймеру `CHAT_RETENTION_SWEEP_MS` (дефолт 1 ч). GC отвязанных живых сессий через `DETACH_GC_MS`=30 мин. `listChats(wid)` (память + персист с непустой историей) → `/api/workspaces/:wid/chats`.
 - `projects.ts` — БД, `listProjects()` (+автообнаружение), `createProject`, `cloneRepo(url)`, `deleteProject(id)` (удаляет папку, потом запись), `getProject`. Экспортирует `PROJECTS_DIR`, `DB_PATH`.
 - `git.ts` — обёртки simple-git (`getLog` / `getBranches` / `commitAll` / `pushRepo`) с кэшем.
 - `telegram.ts` — опциональный Telegram-бот (long polling). Поднимается из `index.ts`, только если задан `TELEGRAM_BOT_TOKEN`. Те же роли (`PROMPTS`) и проекты, агент запускается через общий `runClaude` (headless): чат привязан к `{ projectId, agent, sessionId }` (таблица `tg_sessions`), контекст — через `--resume`. Команды: `/agent`, `/projects`, `/status`, `/reset`, `/cancel`, `/help`.
@@ -117,7 +118,7 @@ ai-workspace-ide/
 - `Login.tsx` — форма входа. `auth.ts` — клиент (`login`/`logout`/`fetchMe`) + зеркало матрицы прав (`can`, `roleLabel`).
 - `ProjectPicker.tsx` — лаунчер: список проектов (выбор → `?p=<id>` с перезагрузкой), создание нового проекта инлайном, «Добавить репозиторий», вход в общий менеджер (`?p=overseer`), удаление проекта. Каждый проект открывается в своей вкладке браузера.
 - `App.tsx` — оркестратор ОДНОГО воркспейса (проп `workspaceId`): состояние, главный WebSocket (бродкасты + `chat_close`/`terminal_close`), API, раскладка (центр + правая панель действий/git). Текущая ветка — компактно в топбаре. Для overseer git-панель скрыта.
-- `ChatPanel.tsx` — **нативный чат с агентом** (основной интерфейс): своё WS-соединение, пузыри сообщений, markdown-рендер ответа (`react-markdown` + `remark-gfm` + `rehype-highlight`), чипы вызовов инструментов, токеновый стрим, кнопки «Стоп»/«Новый диалог», автоскролл. `memo` + lazy.
+- `ChatPanel.tsx` — **нативный чат с агентом** (основной интерфейс): своё WS-соединение, пузыри сообщений, markdown-рендер ответа (`react-markdown` + `remark-gfm` + `rehype-highlight`), чипы вызовов инструментов, токеновый стрим, кнопки «Стоп»/«Новый диалог», селект стандартных команд (фильтруется по роли через `can`), автоскролл. `memo` + lazy.
 - `Terminal.tsx` — xterm + FitAddon, своё WS-соединение (сырой `bash`). `memo` + lazy.
 - `AddRepoModal.tsx` — добавление репозитория по URL. `ConfirmModal.tsx` / `PromptModal.tsx` — переиспользуемые модалки.
 - `theme.ts` — `agentColors` (цвета ролей, инлайном), `AGENTS`, `agentLabel`, `OVERSEER`.
