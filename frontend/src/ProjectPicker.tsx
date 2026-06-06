@@ -2,9 +2,10 @@ import { useState, useEffect } from 'react'
 import axios from 'axios'
 import AddRepoModal from './AddRepoModal'
 import ConfirmModal from './ConfirmModal'
+import UsersAdmin from './UsersAdmin'
 import { API } from './config'
 import { agentColors } from './theme'
-import { can, roleLabel, logout, User } from './auth'
+import { userCan, roleLabel, logout, User } from './auth'
 import s from './ProjectPicker.module.css'
 
 type Project = { id: string; name: string; path: string; created_at: number }
@@ -28,6 +29,7 @@ export default function ProjectPicker({ user }: { user: User }) {
   const [repoOpen, setRepoOpen] = useState(false)
   const [toDelete, setToDelete] = useState<Project | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [usersOpen, setUsersOpen] = useState(false)
 
   useEffect(() => {
     axios.get<Project[]>(API + '/api/projects')
@@ -62,6 +64,9 @@ export default function ProjectPicker({ user }: { user: User }) {
           <span className={s.user} title={'Роль: ' + roleLabel[user.role]}>
             <span className={s.userName}>{user.username}</span>
             <span className={s.roleTag}>{roleLabel[user.role]}</span>
+            {userCan(user, 'user.manage') && (
+              <button onClick={() => setUsersOpen(true)} title="Управление пользователями" className={s.logout}>Пользователи</button>
+            )}
             <button onClick={doLogout} title="Выйти" className={s.logout}>Выйти</button>
           </span>
         </div>
@@ -78,7 +83,7 @@ export default function ProjectPicker({ user }: { user: User }) {
 
         <div className={s.sectionRow}>
           <span className={s.sectionLabel}>ПРОЕКТЫ</span>
-          {can(user.role, 'project.add') && (
+          {userCan(user, 'project.add') && (
             <div className={s.actions}>
               <button onClick={() => setRepoOpen(true)} className={s.btnGhost}>➕ Репозиторий</button>
               <button onClick={() => { setCreating(c => !c); setName('') }} className={s.btnAccent}>+ Новый проект</button>
@@ -105,7 +110,7 @@ export default function ProjectPicker({ user }: { user: User }) {
             <div key={p.id} onClick={() => openWorkspace(p.id)} className={s.card}>
               <span className={s.cardName}>{p.name}</span>
               <span className={s.cardPath}>{p.path}</span>
-              {can(user.role, 'project.delete') && (
+              {userCan(user, 'project.delete') && (
                 <span onClick={e => { e.stopPropagation(); setToDelete(p) }} title="Удалить проект" className={s.del}>×</span>
               )}
             </div>
@@ -114,6 +119,7 @@ export default function ProjectPicker({ user }: { user: User }) {
       </div>
 
       <AddRepoModal open={repoOpen} onClose={() => setRepoOpen(false)} onAdded={proj => openWorkspace(proj.id)} />
+      <UsersAdmin open={usersOpen} onClose={() => setUsersOpen(false)} me={user} />
       <ConfirmModal
         open={!!toDelete}
         title="Удалить проект"

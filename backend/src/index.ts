@@ -13,7 +13,7 @@ import { listProjects, createProject, getProject, cloneRepo, deleteProject, PROJ
 import { initTelegramBot } from './telegram.js';
 import { handleChatWs, listChats, detachChatWs, initChatDb } from './chat.js';
 import { initAuth, registerAuthRoutes, requireAuth, reqUser, userFromCookieHeader, User } from './auth.js';
-import { can } from './permissions.js';
+import { userCan, Action } from './permissions.js';
 import { WsMessage } from './types.js';
 
 const app = express();
@@ -105,8 +105,8 @@ app.use('/api', (req, res, next) => {
   if (req.path.startsWith('/auth/')) return next();
   requireAuth(req, res, next);
 });
-const gate = (action: Parameters<typeof can>[1]) => (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  if (!can(reqUser(req)?.role, action)) { res.status(403).json({ error: 'Нет прав для этого действия' }); return; }
+const gate = (action: Action) => (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (!userCan(reqUser(req)?.permissions, action)) { res.status(403).json({ error: 'Нет прав для этого действия' }); return; }
   next();
 };
 
@@ -143,7 +143,7 @@ app.get('/api/workspaces/:wid/terminals', (req, res) => {
   res.json(list);
 });
 
-app.get('/api/workspaces/:wid/chats', (req, res) => res.json(listChats(req.params.wid)));
+app.get('/api/workspaces/:wid/chats', (req, res) => res.json(listChats(req.params.wid, reqUser(req)?.id)));
 
 if (serveFrontend) {
   app.get(/^(?!\/api\/).*/, (_req, res) => {
@@ -170,12 +170,12 @@ wss.on('connection', (ws, req) => {
 
       // Чат с агентом — нужна возможность agent.run; обработка в отдельном модуле.
       if (typeof msg.type === 'string' && msg.type.startsWith('chat_')) {
-        if (!can(u?.role, 'agent.run')) { ws.send(JSON.stringify({ type: 'chat_event', chatId: msg.chatId, event: { kind: 'error', text: 'Нет прав на запуск агента' } })); return; }
+        if (!userCan(u?.permissions, 'agent.run')) { ws.send(JSON.stringify({ type: 'chat_event', chatId: msg.chatId, event: { kind: 'error', text: 'Нет прав на запуск агента' } })); return; }
         if (handleChatWs(ws, msg, u)) return;
       }
 
       if (msg.type === 'terminal_create') {
-        if (!can(u?.role, 'terminal.open')) { ws.send(JSON.stringify({ type: 'terminal_exit', terminalId: msg.terminalId })); return; }
+        if (!userCan(u?.permissions, 'terminal.open')) { ws.send(JSON.stringify({ type: 'terminal_exit', terminalId: msg.terminalId })); return; }
         const agent = msg.agent;
         let cwd: string;
         if (agent === 'overseer' || msg.projectId === 'overseer') {

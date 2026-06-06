@@ -1,3 +1,5 @@
+import { Action, Role, defaultPermissions } from './permissions.js';
+
 // Ролевые системные промпты агентов. Агенты запускаются как интерактивный `claude`
 // в PTY-терминале (см. index.ts, terminal_create), роль передаётся через --append-system-prompt.
 // {p} заменяется на рабочую директорию агента.
@@ -21,8 +23,46 @@ export const PROMPTS: Record<string, string> = {
 // Ролевая надстройка к системному промпту — зависит от РОЛИ ПОЛЬЗОВАТЕЛЯ (не от типа агента).
 // Подмешивается в runClaude (roleNote). Детальные возможности роли описаны в скилле role-<роль>.
 export const ROLE_NOTES: Record<string, string> = {
+  sysadmin: 'Пользователь — системный администратор с полным доступом: можешь свободно писать и менять код, коммитить и пушить, плюс он управляет пользователями. Используй навык role-coder.',
   coder: 'Пользователь — кодер с полным доступом: можешь свободно писать и менять код, коммитить и пушить. Используй навык role-coder.',
   analyst: 'Пользователь — аналитик. Работай в режиме исследования и планирования: читай код, объясняй, предлагай план. НЕ меняй файлы и НЕ делай git-коммитов без явной просьбы. Используй навык role-analyst.',
   tester: 'Пользователь — тестировщик. Сфокусируйся на запуске и анализе тестов и сборок. Не трогай прод-код без явной просьбы; коммиты/пуши не делай. Используй навык role-tester.',
   tourist: 'Пользователь — гость с доступом только на чтение. Объясняй и показывай, но ничего не меняй. Используй навык role-tourist.',
 };
+
+// Подписи действий для агента, когда права пользователя отличаются от шаблона роли (поведенчески значимые).
+const AGENT_CAP_LABELS: Partial<Record<Action, string>> = {
+  'terminal.open': 'запускать команды в терминале',
+  'git.commit': 'делать git-коммиты',
+  'git.push': 'пушить в удалённый репозиторий (git push)',
+  'project.add': 'создавать и клонировать проекты',
+  'project.delete': 'удалять проекты',
+};
+
+function sameSet(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every(x => b.includes(x));
+}
+
+// Ролевая надстройка к системному промпту с учётом ФАКТИЧЕСКИХ прав пользователя.
+// Если права совпадают со стандартным шаблоном роли — обычный ROLE_NOTES. Если отличаются
+// (сисадмин настроил пер-юзерно) — добавляем явное перечисление, чтобы агент шёл от
+// реальных прав пользователя, а не от названия роли.
+export function roleNoteFor(role: string, permissions?: Action[]): string | undefined {
+  const base = ROLE_NOTES[role];
+  if (!permissions) return base;
+  const def = defaultPermissions(role as Role);
+  if (sameSet(permissions, def)) return base;
+
+  const caps = Object.keys(AGENT_CAP_LABELS) as Action[];
+  const allowed = caps.filter(a => permissions.includes(a)).map(a => AGENT_CAP_LABELS[a]!);
+  const denied = caps.filter(a => !permissions.includes(a)).map(a => AGENT_CAP_LABELS[a]!);
+  return [
+    base,
+    `⚠️ Права этого пользователя настроены индивидуально и НЕ совпадают со стандартной ролью «${role}». Ориентируйся на фактический список прав ниже, а не на название роли.`,
+    allowed.length
+      ? `Разрешено: ${allowed.join('; ')}.`
+      : 'Изменяющие действия не разрешены — только чтение, объяснения и планирование.',
+    denied.length ? `НЕ разрешено без явной отдельной просьбы: ${denied.join('; ')}.` : '',
+    'Если действие не входит в разрешённые — не выполняй его, а объясни, какое право для этого нужно.',
+  ].filter(Boolean).join(' ');
+}

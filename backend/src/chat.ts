@@ -9,7 +9,8 @@ import { ChildProcess } from 'child_process';
 import Database from 'better-sqlite3';
 import { getProject, PROJECTS_DIR, DB_PATH } from './projects.js';
 import { runClaude } from './agent-stream.js';
-import { ROLE_NOTES } from './agents.js';
+import { roleNoteFor } from './agents.js';
+import { Action } from './permissions.js';
 import { WsMessage } from './types.js';
 
 const DETACH_GC_MS = 30 * 60 * 1000;
@@ -19,6 +20,7 @@ const SWEEP_MS = Number(process.env.CHAT_RETENTION_SWEEP_MS) || 60 * 60 * 1000; 
 export interface ChatMsg { role: 'user' | 'assistant' | 'tool'; text: string; name?: string }
 interface ChatSession {
   workspaceId: string;          // projectId или 'overseer'
+  userId: string | null;        // владелец чата (приватность); null — легаси/общий
   agent: string;
   cwd: string;
   roleNote?: string;            // ролевая надстройка промпта (роль пользователя)
@@ -37,10 +39,13 @@ export function initChatDb(): void {
   db.exec(`CREATE TABLE IF NOT EXISTS chat_sessions (
     chat_id TEXT PRIMARY KEY,
     workspace_id TEXT,
+    user_id TEXT,
     agent TEXT,
     session_id TEXT,
     updated_at INTEGER
   )`);
+  // Миграция старых БД: чат теперь привязан к пользователю (приватность). Старые строки → user_id NULL (легаси-общие).
+  try { db.exec('ALTER TABLE chat_sessions ADD COLUMN user_id TEXT'); } catch { /* колонка уже есть */ }
   // Сообщения — отдельной таблицей (а не JSON-блобом), чтобы чистка по дате была тривиальной.
   db.exec(`CREATE TABLE IF NOT EXISTS chat_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,11 +74,11 @@ export function pruneOldMessages(): void {
 
 function persistSession(chatId: string, s: ChatSession): void {
   if (!db) return;
-  db.prepare(`INSERT INTO chat_sessions (chat_id, workspace_id, agent, session_id, updated_at)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(chat_id) DO UPDATE SET workspace_id=excluded.workspace_id, agent=excluded.agent,
-      session_id=excluded.session_id, updated_at=excluded.updated_at`)
-    .run(chatId, s.workspaceId, s.agent, s.sessionId, Date.now());
+  db.prepare(`INSERT INTO chat_sessions (chat_id, workspace_id, user_id, agent, session_id, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(chat_id) DO UPDATE SET workspace_id=excluded.workspace_id, user_id=excluded.user_id,
+      agent=excluded.agent, session_id=excluded.session_id, updated_at=excluded.updated_at`)
+    .run(chatId, s.workspaceId, s.userId, s.agent, s.sessionId, Date.now());
 }
 
 function persistMsg(chatId: string, m: ChatMsg): void {
@@ -98,23 +103,28 @@ function send(s: ChatSession, data: object): void {
   if (s.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(JSON.stringify(data));
 }
 
-// Список чат-сессий воркспейса для переподключения фронта (аналог /terminals): живые из памяти
-// + персистированные с непустой историей (переживают рестарт бэкенда).
-export function listChats(workspaceId: string): { id: string; agent: string }[] {
+// Список чат-сессий воркспейса ДЛЯ ДАННОГО ПОЛЬЗОВАТЕЛЯ (приватность): живые из памяти +
+// персистированные с непустой историей. Видны только свои чаты (+ легаси с user_id IS NULL).
+export function listChats(workspaceId: string, userId?: string): { id: string; agent: string }[] {
+  const owns = (owner: string | null) => owner == null || owner === userId;
   const out = new Map<string, string>();
-  for (const [id, s] of chats) if (s.workspaceId === workspaceId) out.set(id, s.agent);
+  for (const [id, s] of chats) if (s.workspaceId === workspaceId && owns(s.userId)) out.set(id, s.agent);
   if (db) {
-    const rows = db.prepare(`SELECT chat_id, agent FROM chat_sessions
-      WHERE workspace_id = ? AND chat_id IN (SELECT DISTINCT chat_id FROM chat_messages)`).all(workspaceId) as { chat_id: string; agent: string }[];
+    const rows = db.prepare(`SELECT chat_id, user_id, agent FROM chat_sessions
+      WHERE workspace_id = ? AND (user_id IS NULL OR user_id = ?)
+      AND chat_id IN (SELECT DISTINCT chat_id FROM chat_messages)`).all(workspaceId, userId ?? null) as { chat_id: string; user_id: string | null; agent: string }[];
     for (const r of rows) if (!out.has(r.chat_id)) out.set(r.chat_id, r.agent || 'manager');
   }
   return [...out.entries()].map(([id, agent]) => ({ id, agent }));
 }
 
 // Возвращает true, если сообщение относится к чату и обработано.
-// user — аутентифицированный пользователь WS (для ролевой надстройки промпта).
-export function handleChatWs(ws: WebSocket, msg: WsMessage, user?: { role: string } | null): boolean {
+// user — аутентифицированный пользователь WS (роль/права для надстройки промпта + id для приватности чата).
+export function handleChatWs(ws: WebSocket, msg: WsMessage, user?: { id?: string; role: string; permissions?: Action[] } | null): boolean {
   const chatId = msg.chatId;
+  const uid = user?.id ?? null;
+  // Доступ к чату: только владелец (или легаси-чат без владельца — он общий).
+  const owns = (s: ChatSession) => s.userId == null || s.userId === uid;
 
   if (msg.type === 'chat_create' && chatId) {
     const agent = msg.agent || 'manager';
@@ -127,18 +137,21 @@ export function handleChatWs(ws: WebSocket, msg: WsMessage, user?: { role: strin
       if (!p) { ws.send(JSON.stringify({ type: 'chat_event', chatId, event: { kind: 'error', text: 'Проект не найден' } })); return true; }
       cwd = p.path;
     }
-    const roleNote = user?.role ? ROLE_NOTES[user.role] : undefined;
+    const roleNote = user?.role ? roleNoteFor(user.role, user.permissions) : undefined;
 
     let s = chats.get(chatId);
     if (s) {
+      if (!owns(s)) { ws.send(JSON.stringify({ type: 'chat_event', chatId, event: { kind: 'error', text: 'Чат принадлежит другому пользователю' } })); return true; }
       // переподключение к живой сессии: гасим GC, перевязываем ws
       if (s.killTimer) { clearTimeout(s.killTimer); s.killTimer = null; }
       s.ws = ws;
+      if (s.userId == null) s.userId = uid;   // легаси-чат закрепляем за первым открывшим
       if (roleNote) s.roleNote = roleNote;
     } else {
       // нет в памяти — поднимаем из БД (история + session_id переживают рестарт)
-      const row = db?.prepare('SELECT session_id FROM chat_sessions WHERE chat_id = ?').get(chatId) as { session_id: string | null } | undefined;
-      s = { workspaceId, agent, cwd, roleNote, sessionId: row?.session_id ?? null, history: loadHistory(chatId), proc: null, ws, killTimer: null };
+      const row = db?.prepare('SELECT session_id, user_id FROM chat_sessions WHERE chat_id = ?').get(chatId) as { session_id: string | null; user_id: string | null } | undefined;
+      if (row && row.user_id != null && row.user_id !== uid) { ws.send(JSON.stringify({ type: 'chat_event', chatId, event: { kind: 'error', text: 'Чат принадлежит другому пользователю' } })); return true; }
+      s = { workspaceId, userId: row?.user_id ?? uid, agent, cwd, roleNote, sessionId: row?.session_id ?? null, history: loadHistory(chatId), proc: null, ws, killTimer: null };
       chats.set(chatId, s);
     }
     ws.send(JSON.stringify({ type: 'chat_ready', chatId }));
@@ -149,6 +162,7 @@ export function handleChatWs(ws: WebSocket, msg: WsMessage, user?: { role: strin
   if (msg.type === 'chat_send' && chatId) {
     const s = chats.get(chatId);
     if (!s) { ws.send(JSON.stringify({ type: 'chat_event', chatId, event: { kind: 'error', text: 'Сессия не найдена' } })); return true; }
+    if (!owns(s)) { ws.send(JSON.stringify({ type: 'chat_event', chatId, event: { kind: 'error', text: 'Нет доступа к этому чату' } })); return true; }
     s.ws = ws;
     if (s.proc) { send(s, { type: 'chat_event', chatId, event: { kind: 'error', text: 'Агент ещё отвечает — дождись или нажми «Стоп».' } }); return true; }
 
@@ -188,14 +202,14 @@ export function handleChatWs(ws: WebSocket, msg: WsMessage, user?: { role: strin
 
   if (msg.type === 'chat_cancel' && chatId) {
     const s = chats.get(chatId);
-    if (s?.proc) { try { s.proc.kill(); } catch { /* ignore */ } }
+    if (s && owns(s) && s.proc) { try { s.proc.kill(); } catch { /* ignore */ } }
     return true;
   }
 
   // «Новый диалог» — сбросить контекст (--resume) и историю, сохранив саму сессию.
   if (msg.type === 'chat_reset' && chatId) {
     const s = chats.get(chatId);
-    if (s) {
+    if (s && owns(s)) {
       if (s.proc) { try { s.proc.kill(); } catch { /* ignore */ } s.proc = null; }
       s.sessionId = null;
       s.history = [];
@@ -205,13 +219,18 @@ export function handleChatWs(ws: WebSocket, msg: WsMessage, user?: { role: strin
     return true;
   }
 
-  // Закрытие вкладки — гасим сессию и удаляем её историю из БД.
+  // Закрытие вкладки — гасим сессию и удаляем её историю из БД (только своего чата).
   if (msg.type === 'chat_close' && chatId) {
     const s = chats.get(chatId);
     if (s) {
+      if (!owns(s)) return true;
       if (s.killTimer) clearTimeout(s.killTimer);
       if (s.proc) { try { s.proc.kill(); } catch { /* ignore */ } }
       chats.delete(chatId);
+    } else if (db) {
+      // нет в памяти — проверим владельца в БД, чтобы не удалить чужую историю
+      const row = db.prepare('SELECT user_id FROM chat_sessions WHERE chat_id = ?').get(chatId) as { user_id: string | null } | undefined;
+      if (row && row.user_id != null && row.user_id !== uid) return true;
     }
     dropPersisted(chatId);
     return true;

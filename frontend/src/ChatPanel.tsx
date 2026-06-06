@@ -6,14 +6,14 @@ import 'highlight.js/styles/github-dark.css'
 import clsx from 'clsx'
 import { WS_URL } from './config'
 import { agentColors, agentLabel, OVERSEER } from './theme'
-import { can, Role as UserRole, Action } from './auth'
+import { Action } from './auth'
 import s from './ChatPanel.module.css'
 
 interface Props {
   projectId: string
   agent: string
   wsId: string              // = chatId; стабильный id серверной сессии для переподключения
-  role: UserRole            // роль пользователя — фильтрует набор стандартных команд
+  perms: Action[]           // права пользователя — фильтруют набор стандартных команд
   active?: boolean
 }
 
@@ -57,14 +57,16 @@ function Pre({ children }: { children?: React.ReactNode }) {
   )
 }
 
-function ChatPanel({ projectId, agent, wsId, role, active }: Props) {
+function ChatPanel({ projectId, agent, wsId, perms, active }: Props) {
   const wsRef = useRef<WebSocket | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [ready, setReady] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
+  const cmdRef = useRef<HTMLDivElement>(null)
   const isOverseer = agent === OVERSEER
 
   const send = useCallback((data: object) => {
@@ -126,6 +128,16 @@ function ChatPanel({ projectId, agent, wsId, role, active }: Props) {
 
   useEffect(() => { if (active) taRef.current?.focus() }, [active])
 
+  // закрытие меню команд по клику вне и по Escape
+  useEffect(() => {
+    if (!menuOpen) return
+    const onDown = (e: MouseEvent) => { if (!cmdRef.current?.contains(e.target as Node)) setMenuOpen(false) }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
+  }, [menuOpen])
+
   function submit(textArg?: string) {
     const text = (textArg ?? input).trim()
     if (!text || busy || !ready) return
@@ -142,7 +154,7 @@ function ChatPanel({ projectId, agent, wsId, role, active }: Props) {
   const stop = () => send({ type: 'chat_cancel', chatId: wsId })
   const reset = () => { send({ type: 'chat_reset', chatId: wsId }); setMessages([]); setBusy(false) }
 
-  const cmds = COMMANDS.filter(c => !c.need || can(role, c.need))
+  const cmds = COMMANDS.filter(c => !c.need || perms.includes(c.need))
   function runCommand(id: string) {
     const cmd = cmds.find(c => c.id === id)
     if (!cmd) return
@@ -213,16 +225,33 @@ function ChatPanel({ projectId, agent, wsId, role, active }: Props) {
       {/* Поле ввода */}
       <div className={s.inputBar}>
         {cmds.length > 0 && (
-          <select
-            value=""
-            onChange={e => { runCommand(e.target.value); e.currentTarget.value = '' }}
-            disabled={!ready || busy}
-            title="Стандартные команды"
-            className={s.select}
-          >
-            <option value="" disabled>⚙ Команды</option>
-            {cmds.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
-          </select>
+          <div className={s.cmdWrap} ref={cmdRef}>
+            <button
+              type="button"
+              onClick={() => setMenuOpen(o => !o)}
+              disabled={!ready || busy}
+              title="Стандартные команды"
+              className={s.cmdBtn}
+            >
+              <span>⚙ Команды</span>
+              <span className={clsx(s.cmdChevron, menuOpen && s.cmdChevronOpen)}>⌄</span>
+            </button>
+            {menuOpen && (
+              <div className={s.cmdMenu} role="menu">
+                {cmds.map(c => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => { setMenuOpen(false); runCommand(c.id) }}
+                    className={s.cmdItem}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
         <textarea
           ref={taRef}
@@ -266,4 +295,5 @@ const chatStyles = `
 
 // memo: ререндеры App не должны трогать живые чаты; пересоздаём только при смене сессии.
 export default memo(ChatPanel, (a, b) =>
-  a.projectId === b.projectId && a.agent === b.agent && a.wsId === b.wsId && a.role === b.role && a.active === b.active)
+  a.projectId === b.projectId && a.agent === b.agent && a.wsId === b.wsId
+  && a.perms.join(',') === b.perms.join(',') && a.active === b.active)

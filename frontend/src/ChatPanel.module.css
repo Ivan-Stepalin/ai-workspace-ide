@@ -61,22 +61,59 @@
   background: var(--color-sidebar);
   padding: 10px 12px;
 }
-.select {
+/* собственное выпадающее меню команд — все отступы контролируем сами,
+   нативный <select> рисует список средствами ОС и паддинги пунктов не берёт */
+.cmdWrap { position: relative; flex-shrink: 0; }
+.cmdBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   height: 40px;
-  flex-shrink: 0;
   border-radius: 8px;
   border: 1px solid var(--color-edge);
   background: var(--color-app);
-  padding: 0 8px;
+  padding: 0 12px;
   font-size: 12px;
   color: var(--color-muted);
   outline: none;
   cursor: pointer;
+  white-space: nowrap;
   transition: border-color 0.15s, color 0.15s;
 }
-.select:hover { color: var(--color-fg); }
-.select:focus { border-color: var(--color-accent); }
-.select:disabled { opacity: 0.5; cursor: not-allowed; }
+.cmdBtn:hover:not(:disabled) { color: var(--color-fg); }
+.cmdBtn:focus-visible { border-color: var(--color-accent); }
+.cmdBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.cmdChevron { font-size: 12px; line-height: 1; transition: transform 0.15s; }
+.cmdChevronOpen { transform: rotate(180deg); }
+
+.cmdMenu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid var(--color-edge);
+  background: var(--color-sidebar);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+}
+.cmdItem {
+  text-align: left;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--color-fg);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s;
+}
+.cmdItem:hover { background: rgba(255, 255, 255, 0.06); }
 .textarea {
   max-height: 160px;
   min-height: 40px;

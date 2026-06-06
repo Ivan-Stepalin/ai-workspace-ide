@@ -7,7 +7,7 @@ import PromptModal, { PromptConfig } from './PromptModal'
 import { agentColors, AGENTS, agentLabel, OVERSEER } from './theme'
 import { API, WS_URL } from './config'
 import { Project, GitCommit, GitBranches } from './types'
-import { can, roleLabel, logout, User } from './auth'
+import { userCan, roleLabel, logout, User } from './auth'
 import s from './App.module.css'
 
 // Тяжёлые панели — отдельными lazy-чанками (не на старте): чат с агентом и сырой терминал
@@ -219,7 +219,7 @@ export default function App({ workspaceId, user }: { workspaceId: string; user: 
             {tabs.map(tab => tab.type !== 'chat' ? null : (
               <div key={tab.uid} className={s.pane} style={{ display: activeUid === tab.uid ? 'block' : 'none' }}>
                 <Suspense fallback={<div className={s.loading}>Загрузка чата…</div>}>
-                  <ChatPanel projectId={workspaceId} agent={tab.agentType} wsId={tab.wsId} role={user.role} active={activeUid === tab.uid} />
+                  <ChatPanel projectId={workspaceId} agent={tab.agentType} wsId={tab.wsId} perms={user.permissions} active={activeUid === tab.uid} />
                 </Suspense>
               </div>
             ))}
@@ -253,10 +253,10 @@ export default function App({ workspaceId, user }: { workspaceId: string; user: 
             <>
               <div className={s.sectionHead}>ОБЩИЙ МЕНЕДЖЕР</div>
               <div className={s.btnList}>
-                {can(user.role, 'agent.run') && <button onClick={() => openAgent(OVERSEER)} className={s.btnAgent}>🧭 Открыть менеджера</button>}
-                {can(user.role, 'project.add') && <button onClick={() => setRepoModalOpen(true)} className={s.btnSecondary}>➕ Добавить репозиторий</button>}
-                {can(user.role, 'terminal.open') && <button onClick={openTerminal} className={s.btnSecondary}>⌨ Терминал</button>}
-                {user.role === 'tourist' && <div className={s.touristNote}>Гостевой доступ — только просмотр.</div>}
+                {userCan(user, 'agent.run') && <button onClick={() => openAgent(OVERSEER)} className={s.btnAgent}>🧭 Открыть менеджера</button>}
+                {userCan(user, 'project.add') && <button onClick={() => setRepoModalOpen(true)} className={s.btnSecondary}>➕ Добавить репозиторий</button>}
+                {userCan(user, 'terminal.open') && <button onClick={openTerminal} className={s.btnSecondary}>⌨ Терминал</button>}
+                {!userCan(user, 'agent.run') && !userCan(user, 'terminal.open') && <div className={s.touristNote}>Доступ только на просмотр.</div>}
               </div>
             </>
           ) : (
@@ -273,13 +273,13 @@ export default function App({ workspaceId, user }: { workspaceId: string; user: 
 
               <div className={s.divider} />
               <div className={s.btnList}>
-                {can(user.role, 'agent.run') && AGENTS.map(a => (
+                {userCan(user, 'agent.run') && AGENTS.map(a => (
                   <button key={a.type} onClick={() => openAgent(a.type)} className={s.btnAgent} style={{ backgroundColor: agentColors[a.type] }}>+ {a.label}</button>
                 ))}
-                {can(user.role, 'terminal.open') && <button onClick={openTerminal} className={s.btnSecondary}>⌨ Терминал</button>}
-                {can(user.role, 'git.commit') && <button onClick={() => setPromptCfg({ title: 'Коммит', label: 'Сообщение коммита', placeholder: 'chore: update', confirmLabel: 'Закоммитить', onSubmit: m => axios.post(API + '/api/projects/' + workspaceId + '/commit', { message: m }).then(() => { axios.get<GitCommit[]>(API + '/api/projects/' + workspaceId + '/log').then(r => setLog(r.data)) }) })} className={s.btnSecondary}>Commit</button>}
-                {can(user.role, 'git.push') && <button onClick={() => axios.post(API + '/api/projects/' + workspaceId + '/push')} className={s.btnSecondary}>Push</button>}
-                {user.role === 'tourist' && <div className={s.touristNote}>Гостевой доступ — только просмотр.</div>}
+                {userCan(user, 'terminal.open') && <button onClick={openTerminal} className={s.btnSecondary}>⌨ Терминал</button>}
+                {userCan(user, 'git.commit') && <button onClick={() => setPromptCfg({ title: 'Коммит', label: 'Сообщение коммита', placeholder: 'chore: update', confirmLabel: 'Закоммитить', onSubmit: m => axios.post(API + '/api/projects/' + workspaceId + '/commit', { message: m }).then(() => { axios.get<GitCommit[]>(API + '/api/projects/' + workspaceId + '/log').then(r => setLog(r.data)) }) })} className={s.btnSecondary}>Commit</button>}
+                {userCan(user, 'git.push') && <button onClick={() => axios.post(API + '/api/projects/' + workspaceId + '/push')} className={s.btnSecondary}>Push</button>}
+                {!userCan(user, 'agent.run') && !userCan(user, 'terminal.open') && <div className={s.touristNote}>Доступ только на просмотр.</div>}
               </div>
             </>
           )}
